@@ -40,12 +40,14 @@ export function Sidebar({
   connectionState,
   unreadTotal,
   draftCount,
+  onSignOut,
 }: {
   selected: SidebarDestination;
   onSelect: (destination: SidebarDestination) => void;
   connectionState: ConnectionState;
   unreadTotal: number;
   draftCount: number;
+  onSignOut: () => void;
 }) {
   function badgeFor(id: SidebarDestination): number {
     if (id === 'unread' || id === 'allChats') return unreadTotal;
@@ -106,6 +108,13 @@ export function Sidebar({
 
       <div className="border-t border-border">
         <ConnectionBadge state={connectionState} />
+        <button
+          onClick={onSignOut}
+          className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-[12px] text-text-secondary transition-colors hover:bg-bg-hover hover:text-danger"
+        >
+          <Icon.Offline size={14} />
+          {strings.signOut}
+        </button>
       </div>
     </nav>
   );

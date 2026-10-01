@@ -371,7 +371,19 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  function signOut() {
+  /**
+   * Signing out must actually end the session, not just hide the UI: the
+   * session string in localStorage grants account access, and the server-side
+   * authorisation should be revoked too, so the session cannot be reused.
+   */
+  async function signOut() {
+    if (!window.confirm('Sign out of Nodogram on this browser?')) return;
+    try {
+      await clientRef.current?.invoke(new (await import('telegram')).Api.auth.LogOut());
+    } catch {
+      // Still clear locally: being unable to reach Telegram must not leave the
+      // session sitting in this browser.
+    }
     clearSessionString();
     window.location.reload();
   }
@@ -413,6 +425,7 @@ export default function Home() {
         connectionState={connection}
         unreadTotal={unreadTotal}
         draftCount={draftChatIds.size}
+        onSignOut={signOut}
       />
 
       <ChatList
@@ -458,12 +471,6 @@ export default function Home() {
         )}
       </main>
 
-      <button
-        onClick={signOut}
-        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:right-2 focus:rounded focus:bg-bg-elevated focus:px-2 focus:py-1 focus:text-xs"
-      >
-        Sign out
-      </button>
     </div>
   );
 }
