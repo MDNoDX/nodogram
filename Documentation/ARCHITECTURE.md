@@ -116,6 +116,30 @@ Two further traps, both cost real time and are recorded so they are not re-hit:
 The third bullet is the most consequential sentence in this document. It forbids
 parallel update processing anywhere in the sync layer.
 
+### 1.3b One TDLib manager per process **[verified: SIGABRT]**
+
+Creating a second `TDLibClientManager` aborts the process. Each manager starts
+its own `td_receive` loop, and TDLib's contract forbids concurrent `td_receive`.
+This was found by integration tests that built a gateway per test: the first
+passed, then the run died with signal 6.
+
+TDLibKit says so too — *"Since `td_receive` can be called only from a single
+thread, `TDLibClient`'s initializer is private"*.
+
+This is not a constraint to work around; it is TDLib's intended shape, and it
+happens to be exactly what multi-account needs (brief §40):
+
+```
+one TDLibClientManager  (one td_receive loop, process-wide)
+  └── one TDLibClient per account   (isolated database + files directory)
+```
+
+`TelegramGateway` therefore holds a `nonisolated(unsafe) static let` manager and
+one client per instance. A second consequence: `shutdown()` closes **only** its
+own client. `TDLibClientManager.closeClients()` closes every client and then
+busy-waits (`while (!clients.isEmpty) {}`), which would stall other accounts and
+spin a core.
+
 ### 1.4 Dependency facts **[verified]**
 
 | Package | Version | License | Note |

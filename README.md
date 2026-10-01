@@ -8,9 +8,13 @@ search that Telegram never gave you.
 > endorsed by, or sponsored by Telegram Messenger LLP. It does not use the
 > Telegram name, logo, or branding.
 
-**Status: Phase 1 complete — architecture and analysis.** No application code
-yet, by design. The foundation was verified by building and running against real
-TDLib before committing to a design.
+**Status: runs on macOS.** The app builds, launches, and connects to TDLib.
+Sign-in works once you add your own Telegram API credentials; message sync,
+drafts, search and the local archive follow in later phases.
+
+```bash
+./Tools/build-app.sh && open build/Nodogram.app
+```
 
 ---
 
@@ -59,7 +63,7 @@ Verified on macOS 26.5, Xcode 26.6, Swift 6.3.3, Apple M1 Pro.
 
 ## Requirements
 
-- macOS 14+ (development on 26.5)
+- macOS 15+ (see [DECISIONS.md](Documentation/DECISIONS.md) D2 — the prebuilt TDLib binary has a macOS 15 floor)
 - Xcode 26+ / Swift 6.3+
 - Apple Silicon or Intel
 - A Telegram account
@@ -106,9 +110,19 @@ PRODUCT_BUNDLE_IDENTIFIER = com.yourcompany.nodogram
 Signing is only required to run a bundled `.app` (notifications, Keychain,
 sandbox entitlements). It is not needed to build and test the core libraries.
 
-### 3. Build
+### 3. Build and run
 
-Available from Phase 2. The first build downloads a ~300 MB TDLib xcframework.
+```bash
+./Tools/build-app.sh
+open build/Nodogram.app
+```
+
+The first build downloads a ~300 MB TDLib xcframework and takes a few minutes;
+later builds are fast. Without credentials the app still launches and shows
+setup instructions, so you can check it runs before configuring anything.
+
+Run the tests with `swift test`, and verify the TDLib pin with
+`swift run --package-path Tools/tdlib-probe tdlib-probe`.
 
 ---
 

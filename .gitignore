@@ -32,3 +32,9 @@ Package.resolved.bak
 # ── Tooling / local
 *.log
 .scratch/
+
+# ── Built app bundle (reproducible via Tools/build-app.sh)
+build/
+# Generated icon artifacts; make_icon.py regenerates both
+Tools/icon/*.iconset/
+Tools/icon/*.icns

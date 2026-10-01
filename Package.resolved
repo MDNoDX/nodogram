@@ -1,0 +1,33 @@
+{
+  "originHash" : "7b4d1b33cee74936d566e552b893d0e6e8b92651a568211248645b152dbc85cb",
+  "pins" : [
+    {
+      "identity" : "grdb.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/groue/GRDB.swift",
+      "state" : {
+        "revision" : "b83108d10f42680d78f23fe4d4d80fc88dab3212",
+        "version" : "7.11.1"
+      }
+    },
+    {
+      "identity" : "tdlibframework",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Swiftgram/TDLibFramework",
+      "state" : {
+        "revision" : "9ebb0e55a3607f10f24b3fc3e663bd38e7743ad2",
+        "version" : "1.8.67-0efabf93"
+      }
+    },
+    {
+      "identity" : "tdlibkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Swiftgram/TDLibKit",
+      "state" : {
+        "revision" : "b03132690b427a0bc54fd15307cdd22c7e4b4445",
+        "version" : "1.5.2-tdlib-1.8.67-0efabf93"
+      }
+    }
+  ],
+  "version" : 3
+}

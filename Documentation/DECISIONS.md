@@ -20,18 +20,38 @@ reference only — no code is taken. Full reasoning in
 
 ---
 
-## D2 — Minimum deployment target: macOS 14 (Sonoma)
+## D2 — Minimum deployment target: macOS 15 (Sequoia)
 
-**Date:** 2026-10-01 · **Status:** settled
+**Date:** 2026-10-01 · **Status:** settled · **Revised** from macOS 14 the same
+day, on evidence.
 
-**Consequence:** `@Observable`, SwiftUI's modern navigation, and Swift 6 strict
-concurrency are all available, while Macs from 2023 and earlier remain
-supported. Any API newer than macOS 14 must be guarded with
-`if #available(…)` and have a working fallback — not a degraded dead end.
+**The correction.** macOS 14 was chosen first, for reach. Linking then emitted
+hundreds of warnings of the form *"object file ... was built for newer 'macOS'
+version (15.0) than being linked (14.0)"*. Inspecting the binary explains why:
 
-Development and verification happen on macOS 26.5, so **Phase 2 must add a
-macOS 14 CI job**; building only on 26.5 would let a newer-API dependency slip
-in unnoticed.
+```
+$ otool -l -arch arm64 TDLibFramework | grep minos | sort | uniq -c
+ 954  minos 11.0
+ 553  minos 15.0
+```
+
+**553 of 1507 arm64 objects in the prebuilt TDLib binary are compiled against a
+macOS 15 floor** — roughly a third of the library. TDLibKit's manifest advertises
+`macOS 10.15`, but the shipped binary does not honour that.
+
+Declaring macOS 14 would therefore have shipped an app that *installs* on
+Sonoma and may fail at launch or on first use of an affected code path. That
+could not be verified here either, since development is on macOS 26.5. An
+unverifiable support claim is worse than a narrower honest one.
+
+**Consequence:** minimum is **macOS 15.0**, set in `Package.swift`,
+`Tools/tdlib-probe/Package.swift`, and `LSMinimumSystemVersion`. The link
+warnings are gone, which is the confirmation that the floor now matches reality.
+Reach is narrower than hoped; the alternative was a claim we could not stand
+behind.
+
+Any API newer than macOS 15 must still be guarded with `if #available(…)` and
+have a working fallback.
 
 ---
 
@@ -76,3 +96,34 @@ and heterogeneous variable-height content at that scale.
 those two surfaces only; SwiftUI everywhere else. This is an assumption, so
 **Phase 6 benchmarks it** rather than trusting it. If SwiftUI meets the target,
 this decision is reversed and recorded here.
+
+---
+
+## D6 — One TDLib manager per process, one client per account
+
+**Date:** 2026-10-01 · **Status:** settled, enforced by tests
+
+Creating a second `TDLibClientManager` aborts the process (SIGABRT), because
+each one starts its own `td_receive` loop and TDLib forbids concurrent receive.
+
+**Consequence:** `TelegramGateway` shares a single process-wide manager and owns
+one client per account — which is exactly the structure multi-account isolation
+needs. `shutdown()` closes only its own client, never `closeClients()`, whose
+busy-wait would stall other accounts. Covered by
+`Tests/Integration/TelegramGatewayTests.swift`.
+
+---
+
+## D7 — The app ships as a hand-assembled bundle, not an .xcodeproj
+
+**Date:** 2026-10-01 · **Status:** settled
+
+`Tools/build-app.sh` compiles the SPM executable and assembles
+`build/Nodogram.app`, injecting Telegram credentials into `Info.plist` from the
+git-ignored `Config/Secrets.xcconfig` at build time.
+
+**Consequence:** one build path that works identically from the CLI and from CI,
+with no generated project to drift out of sync. Credentials stay out of source.
+Signing is ad-hoc unless `DEVELOPMENT_TEAM` is set, which is enough to run
+locally and keeps Keychain access working. A notarized build for distribution
+needs a real Developer ID, which is a packaging-phase concern.
