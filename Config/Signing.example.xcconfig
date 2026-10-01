@@ -1,0 +1,17 @@
+// ─────────────────────────────────────────────────────────────────────────────
+//  Nodogram — Code signing template
+//
+//  SETUP:
+//    1. cp Config/Signing.example.xcconfig Config/Signing.xcconfig
+//    2. Fill in the values below.
+//    3. Never commit Signing.xcconfig — it is git-ignored.
+//
+//  DEVELOPMENT_TEAM : Apple Developer Team ID (10 chars), from
+//                     https://developer.apple.com/account → Membership.
+//  PRODUCT_BUNDLE_IDENTIFIER : reverse-DNS id you control, e.g. com.example.nodogram
+// ─────────────────────────────────────────────────────────────────────────────
+
+DEVELOPMENT_TEAM =
+PRODUCT_BUNDLE_IDENTIFIER = com.example.nodogram
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = Apple Development

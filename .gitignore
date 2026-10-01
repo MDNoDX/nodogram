@@ -1,0 +1,34 @@
+# ── Secrets — never commit (LEGAL_AND_LICENSES.md §3, SECURITY_MODEL.md §7)
+Config/Secrets.xcconfig
+Config/Signing.xcconfig
+*.p12
+*.mobileprovision
+.env
+.env.local
+
+# ── Xcode
+build/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# ── Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved.bak
+
+# ── macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# ── Tooling / local
+*.log
+.scratch/
