@@ -127,3 +127,44 @@ with no generated project to drift out of sync. Credentials stay out of source.
 Signing is ad-hoc unless `DEVELOPMENT_TEAM` is set, which is enough to run
 locally and keeps Keychain access working. A notarized build for distribution
 needs a real Developer ID, which is a packaging-phase concern.
+
+---
+
+## D8 — Nodogram cannot be deployed to Vercel (or any web host)
+
+**Date:** 2026-10-01 · **Status:** settled, by physics rather than preference
+
+Deploying Nodogram to Vercel was requested and is not possible. Three
+independent blockers, any one of which is sufficient:
+
+1. **Platform.** Nodogram is an `arm64` macOS Mach-O binary built on SwiftUI and
+   AppKit. Vercel executes Node.js, Python, Go and Ruby on Linux. SwiftUI and
+   AppKit do not exist outside Apple platforms, so the entire UI layer has no
+   target to run on. This is not a porting task; it is a rewrite.
+
+2. **Statefulness.** Even a rewritten web client could not put *TDLib* on
+   Vercel. TDLib requires a long-lived process that continuously calls
+   `td_receive`, plus a persistent database directory. Vercel's functions are
+   stateless and ephemeral, and their filesystem does not survive between
+   invocations. Vercel could host a frontend; it cannot host the Telegram layer.
+
+3. **There is no database to connect.** TDLib owns its own encrypted store, and
+   Nodogram's local-only data — drafts, draft history, notes, bookmarks, the
+   deletion archive — lives in SQLite on the user's Mac *by design*
+   (`SECURITY_MODEL.md` §1, `DATA_MODEL.md`). Moving it to a hosted database
+   would invert the privacy model the product is built around: the archive in
+   particular can contain messages senders believed were deleted, and putting
+   that on a shared server is precisely what the design refuses to do.
+
+**Consequence — the closest correct alternative.** Distribution happens through
+GitHub: `.github/workflows/build.yml` builds, tests and packages the app on
+every push, and attaches a downloadable `.app` to tagged releases. That gives
+"install it from GitHub on any Mac", which is the deployable form this product
+actually has.
+
+**If browser or server access is genuinely required**, that is a different
+product: a web client, with a Next.js frontend (which *can* live on Vercel) and
+a TDLib backend on a stateful host with a persistent volume — Fly.io, Railway,
+Render or a VPS. It is a substantial separate project, and it changes the
+privacy model, because local-only data would then live on a server. That
+trade-off must be decided deliberately, not inherited by accident.

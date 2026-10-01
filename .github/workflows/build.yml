@@ -1,0 +1,105 @@
+name: Build and Test
+
+# Builds and tests Nodogram on every push, and attaches a downloadable .app
+# to tagged releases. This is the GitHub half of distribution; Nodogram is a
+# native macOS app and cannot be deployed to a web host — see
+# Documentation/DECISIONS.md D8.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # macOS 15 runner: the prebuilt TDLib binary has a macOS 15 floor
+    # (Documentation/DECISIONS.md D2), so an older runner would not reflect
+    # what users actually run.
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+          sw_vers
+
+      # The TDLib xcframework is ~300 MB. Caching it turns a multi-minute
+      # download into seconds on every run after the first.
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Verify the TDLib pin
+        # Fails loudly if the pinned TDLib is not the one UPSTREAM.md documents.
+        run: swift run --package-path Tools/tdlib-probe tdlib-probe
+
+      - name: Build
+        run: swift build -c release --product NodogramApp
+
+      - name: Test
+        # Includes integration tests against the real TDLib binary. They need
+        # no Telegram account and make no network calls.
+        run: swift test
+
+      - name: Assemble the app bundle
+        # No credentials in CI: the app builds and launches, showing its setup
+        # screen. Credentials belong on the developer's machine only.
+        run: ./Tools/build-app.sh release
+
+      - name: Check the bundle is launchable
+        run: |
+          codesign --verify --verbose=1 build/Nodogram.app
+          test -x build/Nodogram.app/Contents/MacOS/Nodogram
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" build/Nodogram.app/Contents/Info.plist
+
+      - name: Confirm no credentials were committed
+        # A credential committed once stays in history, so this guards the
+        # whole repository rather than just the working tree.
+        run: |
+          if git ls-files | grep -E 'Config/(Secrets|Signing)\.xcconfig$'; then
+            echo "::error::Credential file is tracked by git"
+            exit 1
+          fi
+          echo "OK: no credential files tracked"
+
+      - name: Package for download
+        run: |
+          mkdir -p dist
+          ditto -c -k --keepParent build/Nodogram.app dist/Nodogram-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nodogram-macOS
+          path: dist/Nodogram-macOS.zip
+          retention-days: 14
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Nodogram-macOS.zip
+          body: |
+            Nodogram — unofficial macOS Telegram client.
+
+            **This build is unsigned.** macOS will refuse it on first launch;
+            right-click the app and choose Open, or run:
+            `xattr -dr com.apple.quarantine Nodogram.app`
+
+            You must supply your own Telegram API credentials — the app shows
+            setup instructions on launch. See the README.
