@@ -8,7 +8,17 @@ search that Telegram never gave you.
 > endorsed by, or sponsored by Telegram Messenger LLP. It does not use the
 > Telegram name, logo, or branding.
 
-**Status: runs on macOS.** The app builds, launches, and connects to TDLib.
+**Live:** [nodogram.vercel.app](https://nodogram.vercel.app) — the browser client,
+deployed automatically from `main`.
+
+**Two clients, one product:**
+
+| | Where it runs | Foundation |
+|---|---|---|
+| **Nodogram Web** (`web/`) | any browser — [nodogram.vercel.app](https://nodogram.vercel.app) | GramJS + IndexedDB, no server |
+| **Nodogram for Mac** (`Nodogram/`) | macOS 15+ | TDLib 1.8.67 + SwiftUI |
+
+**Status (macOS):** the app builds, launches, and connects to TDLib.
 Sign-in works once you add your own Telegram API credentials; message sync,
 drafts, search and the local archive follow in later phases.
 
