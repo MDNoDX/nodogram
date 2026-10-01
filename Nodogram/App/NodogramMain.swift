@@ -22,7 +22,7 @@ struct NodogramMain: App {
         .commands { NodogramCommands() }
 
         Settings {
-            SettingsPlaceholderView()
+            SettingsView()
         }
     }
 }
@@ -62,39 +62,15 @@ struct NodogramCommands: Commands {
     }
 }
 
-/// Settings is a required macOS surface, so it ships as an honest stub rather
-/// than an empty window — the full sections arrive in the settings phase.
-struct SettingsPlaceholderView: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Settings")
-                .font(.system(size: 15, weight: .semibold))
-            Text("""
-                Settings arrive in a later phase: General, Appearance, Chats, \
-                Messages, Notifications, Privacy, Security, Storage, Drafts, \
-                Archive, Search, Keyboard, Folders, Accounts, Advanced, About.
-                """)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(L10n.unofficialDisclosure)
-                .font(.system(size: 10))
-                .foregroundStyle(Theme.tertiaryText)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(20)
-        .frame(width: 420)
-    }
-}
-
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // A messenger belongs in the Dock and should take focus on launch.
+        // A messenger belongs in the Dock. It does not force itself to the
+        // front: macOS already activates an app the user opens, and stealing
+        // focus from whatever they are doing is never acceptable.
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
     }
 }

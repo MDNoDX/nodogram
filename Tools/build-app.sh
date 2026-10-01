@@ -131,9 +131,20 @@ if [ -n "$TEAM_ID" ]; then
            --sign "Developer ID Application" "$APP" 2>/dev/null \
     || codesign --force --deep --sign - "$APP"
 else
-  # Ad-hoc signing is enough to run locally and keeps Keychain access working.
-  say "Signing ad-hoc (no DEVELOPMENT_TEAM set)"
-  codesign --force --deep --sign - "$APP"
+  # Ad-hoc signing, with an explicit designated requirement.
+  #
+  # By default an ad-hoc signature's identity is the binary's hash, which
+  # changes on every build. The Keychain ties stored keys to that identity, so
+  # each rebuild would make macOS ask for the login password again before
+  # Nodogram can read its own archive key. Pinning the requirement to the
+  # bundle identifier keeps the identity stable across builds.
+  #
+  # Trade-off, stated plainly: an identifier is weaker than a certificate —
+  # another ad-hoc app claiming the same identifier would match. Setting
+  # DEVELOPMENT_TEAM in Config/Signing.xcconfig replaces this with a real,
+  # certificate-backed identity.
+  say "Signing ad-hoc with a stable identity (no DEVELOPMENT_TEAM set)"
+  codesign --force --deep --sign - -r="designated => identifier \"$BUNDLE_ID\"" "$APP"
 fi
 
 codesign --verify --verbose=1 "$APP" 2>&1 | sed 's/^/    /'

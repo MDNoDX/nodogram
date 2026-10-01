@@ -5,177 +5,611 @@ import NodogramDomain
 import NodogramUI
 
 public struct ConversationView: View {
-    private let chat: Chat?
-    private let messages: [Message]
-    @Binding private var draftText: String
-    private let draftIndicatorVisible: Bool
-    private let onSend: () -> Void
+    private let model: AppModel
 
-    public init(
-        chat: Chat?,
-        messages: [Message],
-        draftText: Binding<String>,
-        draftIndicatorVisible: Bool,
-        onSend: @escaping () -> Void
-    ) {
-        self.chat = chat
-        self.messages = messages
-        self._draftText = draftText
-        self.draftIndicatorVisible = draftIndicatorVisible
-        self.onSend = onSend
+    /// Bumped every 30 s so "last seen 3 minutes ago" stays true.
+    @State private var clock = Date()
+
+    public init(model: AppModel) {
+        self.model = model
     }
 
     public var body: some View {
-        if let chat {
+        if let chat = model.selectedChat {
             VStack(spacing: 0) {
-                MessageTimeline(messages: messages)
+                ConversationHeader(
+                    chat: chat,
+                    subtitle: subtitle(for: chat, now: clock),
+                    isActivity: model.activityText(for: chat.id) != nil
+                )
                 Divider()
+
+                MessageTimeline(model: model, chat: chat)
+                    .id(chat.id)   // fresh scroll state per chat
+
+                if let error = model.conversationError {
+                    ErrorBanner(message: error, onDismiss: model.dismissConversationError)
+                }
+
                 ComposerView(
-                    text: $draftText,
-                    draftIndicatorVisible: draftIndicatorVisible,
-                    onSend: onSend
+                    chatID: chat.id,
+                    text: Binding(
+                        get: { model.draftText },
+                        set: {
+                            model.draftText = $0
+                            model.draftTextChanged()
+                        }
+                    ),
+                    draftIndicatorVisible: model.draftIndicatorVisible,
+                    onSend: model.sendDraft
                 )
             }
-            .navigationTitle(chat.title)
-            .navigationSubtitle(subtitle(for: chat))
+            .task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(30))
+                    clock = Date()
+                }
+            }
         } else {
             EmptyStateView(
                 icon: "bubble.left.and.text.bubble.right",
                 title: L10n.noConversationTitle,
                 message: L10n.noConversationBody
             )
+            .navigationTitle("Nodogram")
         }
     }
 
-    private func subtitle(for chat: Chat) -> String {
+    private func subtitle(for chat: Chat, now: Date) -> String {
+        if let activity = model.activityText(for: chat.id) { return activity }
+        if chat.isSavedMessages { return "your cloud notes" }
         switch chat.kind {
-        case .privateChat: return ""
-        case .basicGroup, .supergroup: return "Group"
-        case .channel: return "Channel"
-        case .secret: return "Secret chat"
+        case .privateChat, .secret: return PresenceFormatter.describe(chat.presence, now: now) ?? ""
+        case .basicGroup, .supergroup: return "group"
+        case .channel: return "channel"
         }
     }
 }
 
-struct MessageTimeline: View {
-    let messages: [Message]
+// MARK: - Header
+
+/// Telegram-style header. macOS shows only one toolbar title in a three-column
+/// window, so the chat's name and presence get a bar of their own.
+private struct ConversationHeader: View {
+    let chat: Chat
+    let subtitle: String
+    let isActivity: Bool
 
     var body: some View {
-        if messages.isEmpty {
-            EmptyStateView(
-                icon: "text.bubble",
-                title: "No messages yet",
-                message: "Messages in this conversation will appear here."
+        HStack(spacing: 11) {
+            Avatar(
+                title: chat.title,
+                seed: chat.id.rawValue,
+                size: 36,
+                imagePath: chat.avatarPath,
+                thumbnail: chat.avatarThumbnail,
+                isOnline: chat.presence == .online,
+                isSavedMessages: chat.isSavedMessages
             )
-        } else {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(groupedByDay, id: \.day) { section in
-                            DateSeparator(date: section.day)
-                            ForEach(section.messages) { message in
-                                MessageRow(message: message).id(message.id)
-                            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(chat.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .lineLimit(1)
+                    if chat.isVerified {
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.accent)
+                    }
+                    if chat.isMuted {
+                        Image(systemName: "speaker.slash.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(isActivity || chat.presence == .online
+                                         ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
+                        .lineLimit(1)
+                        .contentTransition(.opacity)
+                        .animation(.easeInOut(duration: 0.2), value: subtitle)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(.bar)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: - Timeline
+
+private struct MessageTimeline: View {
+    let model: AppModel
+    let chat: Chat
+
+    @State private var isNearBottom = true
+    /// False until the first page has been scrolled to the bottom. Paging is
+    /// held off until then, because before positioning the view sits at the
+    /// top — which would otherwise immediately trigger "load older".
+    @State private var isPositioned = false
+    private let bottomID = "timeline-bottom"
+
+    private var isGroup: Bool {
+        switch chat.kind {
+        case .basicGroup, .supergroup: return true
+        default: return false
+        }
+    }
+
+    var body: some View {
+        let rows = TimelineRow.build(from: model.messages, groupChat: isGroup)
+        // Read receipts mean nothing in Saved Messages — nobody else reads it.
+        let lastOutgoingID = chat.isSavedMessages ? nil
+            : model.messages.last(where: { $0.isOutgoing && !$0.isService && !$0.isDeleted })?.id
+
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    if model.isLoadingHistory, !model.messages.isEmpty {
+                        ProgressView().controlSize(.small).padding(.vertical, 12)
+                    }
+
+                    ForEach(rows) { row in
+                        switch row.kind {
+                        case .day(let date):
+                            DaySeparator(date: date)
+                        case .service(let message):
+                            ServiceLine(message: message)
+                        case .message(let message, let position):
+                            MessageRow(
+                                model: model,
+                                message: message,
+                                position: position,
+                                showsSender: isGroup,
+                                showsReadLabel: message.id == lastOutgoingID,
+                                showsReceipts: !chat.isSavedMessages
+                            )
+                            .id(message.id)
+                            .onAppear { model.ensureReadDate(for: message) }
                         }
                     }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 14)
+
+                    Color.clear.frame(height: 8).id(bottomID)
+                        // Precise, unlike content-size arithmetic: LazyVStack
+                        // only estimates the height of rows it has not built.
+                        .onScrollVisibilityChange(threshold: 0.01) { visible in
+                            isNearBottom = visible
+                        }
                 }
-                .onAppear {
-                    if let last = messages.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
+                .padding(.horizontal, 18)
+                .padding(.top, 6)
+            }
+            .defaultScrollAnchor(.bottom)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y < 280
+            } action: { wasNearTop, nearTop in
+                // Edge-triggered: only on *entering* the top region, so a page
+                // landing above the viewport cannot trigger the next one.
+                if isPositioned, nearTop, !wasNearTop {
+                    model.loadOlderMessages()
+                }
+            }
+            // First page arrived: settle at the newest message, then allow paging.
+            .onChange(of: model.messages.isEmpty) { _, isEmpty in
+                guard !isEmpty, !isPositioned else { return }
+                proxy.scrollTo(bottomID, anchor: .bottom)
+                Task {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    proxy.scrollTo(bottomID, anchor: .bottom)
+                    isPositioned = true
+                }
+            }
+            .onAppear {
+                if !model.messages.isEmpty, !isPositioned {
+                    proxy.scrollTo(bottomID, anchor: .bottom)
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(350))
+                        isPositioned = true
                     }
                 }
             }
-        }
-    }
-
-    private struct DaySection {
-        let day: Date
-        let messages: [Message]
-    }
-
-    /// Date separators, without repeating the date unnecessarily (brief §65).
-    private var groupedByDay: [DaySection] {
-        let calendar = Calendar.current
-        let groups = Dictionary(grouping: messages) {
-            calendar.startOfDay(for: $0.date)
-        }
-        return groups.keys.sorted().map { day in
-            DaySection(day: day, messages: groups[day]?.sorted { $0.date < $1.date } ?? [])
-        }
-    }
-}
-
-struct DateSeparator: View {
-    let date: Date
-
-    private var label: String {
-        let calendar = Calendar.current
-        if calendar.isDateInToday(date) { return "TODAY" }
-        if calendar.isDateInYesterday(date) { return "YESTERDAY" }
-        if calendar.isDate(date, equalTo: Date(), toGranularity: .year) {
-            return date.formatted(.dateTime.month(.wide).day()).uppercased()
-        }
-        return date.formatted(.dateTime.year().month(.wide).day()).uppercased()
-    }
-
-    var body: some View {
-        Text(label)
-            .font(Theme.Typography.sectionHeader)
-            .foregroundStyle(Theme.tertiaryText)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-    }
-}
-
-struct MessageRow: View {
-    let message: Message
-
-    var body: some View {
-        HStack {
-            if message.isOutgoing { Spacer(minLength: 60) }
-
-            VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 3) {
-                if !message.isOutgoing && !message.senderName.isEmpty {
-                    Text(message.senderName)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
+            // Follow new messages only when already at the bottom, or when the
+            // user sent it — never yank someone out of older history.
+            .onChange(of: model.messages.last?.id) { _, _ in
+                guard isPositioned, let last = model.messages.last else { return }
+                if isNearBottom || (last.isOutgoing && last.isPending) {
+                    withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(bottomID, anchor: .bottom) }
                 }
-
-                Text(message.text)
-                    .font(Theme.Typography.messageBody)
-                    .textSelection(.enabled)
-                    .foregroundStyle(Theme.primaryText)
-
-                HStack(spacing: 5) {
-                    Text(message.date.formatted(.dateTime.hour().minute()))
-                        .font(Theme.Typography.timestamp)
-                        .foregroundStyle(Theme.tertiaryText)
-                        .help(RelativeTimeFormatter.exact(message.date))
-
-                    if message.wasEdited {
-                        Text(L10n.edited)
-                            .font(Theme.Typography.timestamp)
-                            .foregroundStyle(Theme.tertiaryText)
-                    }
-
-                    if message.isOutgoing {
-                        ReadReceiptLabel(
-                            readDate: message.readDate,
-                            sendState: message.sendState
+            }
+            // Older history was prepended: keep the message the user was
+            // reading exactly where it was.
+            .onChange(of: model.messages.first?.id) { old, new in
+                guard isPositioned, let old, let new, new.rawValue < old.rawValue else { return }
+                proxy.scrollTo(old, anchor: .top)
+            }
+            .overlay {
+                if model.messages.isEmpty {
+                    if model.isLoadingHistory {
+                        ProgressView().controlSize(.small)
+                    } else if model.conversationError == nil {
+                        EmptyStateView(
+                            icon: "text.bubble",
+                            title: "No messages yet",
+                            message: "Say hello — your first message appears here."
                         )
                     }
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                message.isOutgoing ? Theme.accentSoft : Theme.listBackground,
-                in: RoundedRectangle(cornerRadius: Theme.Metrics.cornerRadius)
-            )
-
-            if !message.isOutgoing { Spacer(minLength: 60) }
+            .overlay(alignment: .bottomTrailing) {
+                if !isNearBottom, isPositioned {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(width: 34, height: 34)
+                            .background(.regularMaterial, in: Circle())
+                            .overlay(Circle().stroke(.separator, lineWidth: 0.5))
+                            .shadow(color: .black.opacity(0.15), radius: 5, y: 1)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(16)
+                    .help("Jump to latest")
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if let toast = model.toast, model.viewerMessageID == nil {
+                    Text(toast)
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(.regularMaterial, in: Capsule())
+                        .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                        .padding(.bottom, 14)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeOut(duration: 0.2), value: model.toast)
         }
+    }
+}
+
+// MARK: - Rows
+
+struct GroupPosition: Equatable {
+    var isFirst: Bool
+    var isLast: Bool
+}
+
+struct TimelineRow: Identifiable {
+    enum Kind {
+        case day(Date)
+        case service(Message)
+        case message(Message, GroupPosition)
+    }
+
+    let id: String
+    let kind: Kind
+
+    /// Day separators, then runs: consecutive messages from one sender, on one
+    /// day, within five minutes, render as a tight group.
+    static func build(from messages: [Message], groupChat: Bool) -> [TimelineRow] {
+        var rows: [TimelineRow] = []
+        rows.reserveCapacity(messages.count + 8)
+        let calendar = Calendar.current
+        var lastDay: Date?
+
+        func sameRun(_ a: Message, _ b: Message) -> Bool {
+            guard !a.isService, !b.isService, a.isOutgoing == b.isOutgoing else { return false }
+            guard calendar.isDate(a.date, inSameDayAs: b.date) else { return false }
+            guard abs(b.date.timeIntervalSince(a.date)) < 300 else { return false }
+            return a.isOutgoing || (a.senderID == b.senderID && a.senderName == b.senderName)
+        }
+
+        for (index, message) in messages.enumerated() {
+            let day = calendar.startOfDay(for: message.date)
+            if day != lastDay {
+                rows.append(TimelineRow(id: "day-\(day.timeIntervalSince1970)", kind: .day(day)))
+                lastDay = day
+            }
+            if message.isService {
+                rows.append(TimelineRow(id: "svc-\(message.id.rawValue)", kind: .service(message)))
+                continue
+            }
+            let previous = index > 0 ? messages[index - 1] : nil
+            let next = index + 1 < messages.count ? messages[index + 1] : nil
+            let position = GroupPosition(
+                isFirst: previous.map { !sameRun($0, message) } ?? true,
+                isLast: next.map { !sameRun(message, $0) } ?? true)
+            rows.append(TimelineRow(id: "msg-\(message.id.rawValue)", kind: .message(message, position)))
+        }
+        return rows
+    }
+}
+
+private struct DaySeparator: View {
+    let date: Date
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 4)
+            .background(.regularMaterial, in: Capsule())
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private var label: String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "Today" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        if calendar.isDate(date, equalTo: Date(), toGranularity: .year) {
+            return date.formatted(.dateTime.weekday(.wide).month(.wide).day())
+        }
+        return date.formatted(.dateTime.year().month(.wide).day())
+    }
+}
+
+private struct ServiceLine: View {
+    let message: Message
+
+    var body: some View {
+        let actor = message.isOutgoing ? "You" : message.senderName
+        Text([actor, message.text].filter { !$0.isEmpty }.joined(separator: " "))
+            .font(.system(size: 11.5))
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 4)
+            .background(.quaternary.opacity(0.5), in: Capsule())
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .help(RelativeTimeFormatter.exact(message.date))
+    }
+}
+
+private struct MessageRow: View {
+    let model: AppModel
+    let message: Message
+    let position: GroupPosition
+    let showsSender: Bool
+    let showsReadLabel: Bool
+    let showsReceipts: Bool
+
+    private var showsAvatarColumn: Bool { showsSender && !message.isOutgoing }
+
+    var body: some View {
+        VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 3) {
+            HStack(alignment: .bottom, spacing: 8) {
+                if message.isOutgoing { Spacer(minLength: 60) }
+
+                if showsAvatarColumn {
+                    if position.isLast {
+                        Avatar(title: message.senderName, seed: message.senderID?.rawValue ?? 0, size: 30)
+                    } else {
+                        Color.clear.frame(width: 30, height: 1)
+                    }
+                }
+
+                MessageBubble(
+                    model: model,
+                    message: message,
+                    position: position,
+                    showsSenderName: showsSender && !message.isOutgoing && position.isFirst,
+                    showsReceipt: showsReceipts
+                )
+
+                if !message.isOutgoing { Spacer(minLength: 60) }
+            }
+
+            if showsReadLabel {
+                ReadReceiptLabel(message: message, style: .detailed)
+                    .padding(.trailing, 4)
+            }
+        }
+        .padding(.top, position.isFirst ? 8 : 2)
+    }
+}
+
+private struct MessageBubble: View {
+    let model: AppModel
+    let message: Message
+    let position: GroupPosition
+    let showsSenderName: Bool
+    let showsReceipt: Bool
+
+    @State private var spoilersRevealed = false
+
+    /// Media that looks best edge-to-edge, without bubble padding around it.
+    private var isBareMedia: Bool {
+        guard message.text.isEmpty, !message.isDeleted, let media = message.media else { return false }
+        switch media {
+        case .photo, .video, .animation, .videoNote, .sticker: return true
+        default: return false
+        }
+    }
+
+    private var shape: UnevenRoundedRectangle {
+        // The corner nearest the sender tightens on the last message of a run.
+        let big: CGFloat = 16, small: CGFloat = 5
+        return message.isOutgoing
+            ? UnevenRoundedRectangle(topLeadingRadius: big, bottomLeadingRadius: big,
+                                     bottomTrailingRadius: position.isLast ? small : big,
+                                     topTrailingRadius: position.isFirst ? big : small)
+            : UnevenRoundedRectangle(topLeadingRadius: position.isFirst ? big : small,
+                                     bottomLeadingRadius: position.isLast ? small : big,
+                                     bottomTrailingRadius: big, topTrailingRadius: big)
+    }
+
+    var body: some View {
+        Group {
+            if isBareMedia, let media = message.media {
+                bareMedia(media)
+            } else {
+                bubble
+            }
+        }
+        .opacity(message.isPending ? 0.75 : 1)
+        .contextMenu { MediaActions.menu(for: message, model: model) }
+    }
+
+    private var bubble: some View {
+        BubbleLayout(maxWidth: 480) {
+            if showsSenderName, !message.senderName.isEmpty {
+                Text(message.senderName)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(Theme.senderColor(for: message.senderID?.rawValue ?? 0))
+                    .lineLimit(1)
+            }
+
+            if message.isDeleted, let label = message.attachmentLabel {
+                Label(label, systemImage: "paperclip")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+            } else if let media = message.media {
+                MessageMediaView(message: message, media: media, model: model)
+                    .padding(.top, 2)
+            } else if let label = message.attachmentLabel {
+                AttachmentChip(label: label)
+            }
+
+            if !message.text.isEmpty {
+                Text(FormattedText.attributed(message.text, entities: message.entities, baseSize: 13.5))
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(message.isDeleted ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .environment(\.openURL, OpenURLAction { url in
+                        NSWorkspace.shared.open(url)
+                        return .handled
+                    })
+                    .overlay {
+                        if FormattedText.hasSpoiler(message.entities), !spoilersRevealed {
+                            Color.clear.contentShape(Rectangle())
+                                .onTapGesture { withAnimation { spoilersRevealed = true } }
+                                .help("Click to reveal")
+                        }
+                    }
+            }
+
+            footer
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(fill, in: shape)
+        .overlay {
+            if message.isDeleted {
+                shape.strokeBorder(Theme.failure.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            }
+        }
+    }
+
+    private var fill: AnyShapeStyle {
+        if message.isDeleted { return AnyShapeStyle(Theme.failure.opacity(0.07)) }
+        return message.isOutgoing ? AnyShapeStyle(Theme.bubbleOutgoing) : AnyShapeStyle(Theme.bubbleIncoming)
+    }
+
+    /// Photos, videos, round videos and stickers sit without a bubble; the
+    /// time floats over the corner like Telegram's.
+    private func bareMedia(_ media: MessageMedia) -> some View {
+        VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 4) {
+            if showsSenderName, !message.senderName.isEmpty {
+                Text(message.senderName)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(Theme.senderColor(for: message.senderID?.rawValue ?? 0))
+                    .padding(.leading, 4)
+            }
+            MessageMediaView(message: message, media: media, model: model)
+                .overlay(alignment: .bottomTrailing) {
+                    footer
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(.black.opacity(0.45), in: Capsule())
+                        .padding(7)
+                }
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 4) {
+            if message.isDeleted, let deletedAt = message.deletedAt {
+                Image(systemName: "trash")
+                    .font(.system(size: 9.5, weight: .semibold))
+                Text("Deleted · \(deletedAt.formatted(.dateTime.hour().minute()))")
+                    .help("""
+                        Deleted by the sender \(RelativeTimeFormatter.exact(deletedAt)). \
+                        This copy exists only on this Mac — it is gone from Telegram.
+                        """)
+            } else if message.wasEdited {
+                Text(L10n.edited.lowercased())
+                    .help(message.editDate.map { "Edited \(RelativeTimeFormatter.exact($0))" } ?? "")
+            }
+            Text(message.date.formatted(.dateTime.hour().minute()))
+                .help(RelativeTimeFormatter.exact(message.date))
+            if message.isOutgoing, !message.isDeleted, showsReceipt {
+                ReadReceiptLabel(message: message, style: .compact)
+            }
+        }
+        .font(.system(size: 10.5).monospacedDigit())
+        .foregroundStyle(message.isDeleted ? AnyShapeStyle(Theme.failure) : AnyShapeStyle(.secondary))
+    }
+}
+
+/// For content that has no richer view (polls, locations, unsupported types).
+private struct AttachmentChip: View {
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: 28, height: 28)
+                .background(Theme.accent.opacity(0.16), in: RoundedRectangle(cornerRadius: 7))
+                .foregroundStyle(Theme.accent)
+            Text(label)
+                .font(.system(size: 12.5, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var symbol: String {
+        let lower = label.lowercased()
+        if lower == "location" { return "mappin.and.ellipse" }
+        if lower == "contact" { return "person.crop.circle" }
+        if lower == "poll" { return "chart.bar.xaxis" }
+        if lower.hasPrefix("call") || lower.hasPrefix("video call") { return "phone" }
+        if lower == "story" { return "circle.dashed" }
+        if lower == "checklist" { return "checklist" }
+        if lower.contains("expired") { return "timer" }
+        if lower.contains("unsupported") || lower.contains("not supported") { return "questionmark.square.dashed" }
+        return "doc"
+    }
+}
+
+private struct ErrorBanner: View {
+    let message: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning)
+            Text(message).font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading)
+            Button("Dismiss", action: onDismiss).buttonStyle(.borderless).font(.system(size: 12))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Theme.warning.opacity(0.1))
+        .overlay(alignment: .top) { Divider() }
     }
 }

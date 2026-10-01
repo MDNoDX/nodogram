@@ -1,14 +1,14 @@
 //  Message composer.
 //
-//  Keyboard behaviour matters more here than anywhere else in the app:
-//  ⌘↵ sends, ↵ inserts a newline. That split is deliberate — in a messenger
-//  used for real work, an accidental ↵ send is worse than an extra keystroke.
+//  ⌘↩ sends; ↩ inserts a newline. In a messenger used for real work an
+//  accidental send is worse than an extra keystroke (brief §21).
 
 import SwiftUI
 import NodogramDomain
 import NodogramUI
 
 public struct ComposerView: View {
+    private let chatID: ChatID
     @Binding private var text: String
     private let draftIndicatorVisible: Bool
     private let onSend: () -> Void
@@ -16,10 +16,12 @@ public struct ComposerView: View {
     @FocusState private var isFocused: Bool
 
     public init(
+        chatID: ChatID,
         text: Binding<String>,
         draftIndicatorVisible: Bool,
         onSend: @escaping () -> Void
     ) {
+        self.chatID = chatID
         self._text = text
         self.draftIndicatorVisible = draftIndicatorVisible
         self.onSend = onSend
@@ -30,55 +32,67 @@ public struct ComposerView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // "Draft saved" is quiet and non-blocking: the brief forbids
-            // interrupting typing with UI (brief §23).
-            if draftIndicatorVisible {
-                Text(L10n.draftSaved)
-                    .font(Theme.Typography.timestamp)
-                    .foregroundStyle(Theme.tertiaryText)
-                    .transition(.opacity)
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            Divider()
 
-            HStack(alignment: .bottom, spacing: 8) {
-                Button {
-                    // Attachment picking arrives with the media phase.
-                } label: {
-                    Image(systemName: "paperclip")
-                }
-                .buttonStyle(.borderless)
-                .help("Attach a file")
-                .disabled(true)
-
-                TextEditor(text: $text)
-                    .font(Theme.Typography.messageBody)
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 22, maxHeight: 120)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .focused($isFocused)
-                    .overlay(alignment: .topLeading) {
-                        if text.isEmpty {
-                            Text(L10n.messagePlaceholder)
-                                .font(Theme.Typography.messageBody)
-                                .foregroundStyle(Theme.tertiaryText)
-                                .allowsHitTesting(false)
-                        }
+            HStack(alignment: .bottom, spacing: 10) {
+                ZStack(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text(L10n.messagePlaceholder)
+                            .font(.system(size: 13.5))
+                            .foregroundStyle(.tertiary)
+                            .padding(.leading, 5)
+                            .padding(.top, 1)
+                            .allowsHitTesting(false)
                     }
+                    TextEditor(text: $text)
+                        .font(.system(size: 13.5))
+                        .scrollContentBackground(.hidden)
+                        .scrollIndicators(.never)
+                        .focused($isFocused)
+                        .frame(minHeight: 20, maxHeight: 140)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(.background, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(isFocused ? Theme.accent.opacity(0.55) : Color.secondary.opacity(0.25), lineWidth: 1)
+                )
 
                 Button(action: onSend) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 19))
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(canSend ? Theme.accent : Color.secondary.opacity(0.35), in: Circle())
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(canSend ? Theme.accent : Theme.tertiaryText)
+                .buttonStyle(.plain)
                 .disabled(!canSend)
                 .keyboardShortcut(.return, modifiers: .command)
-                .help("\(L10n.send) (⌘↵)")
+                .help("\(L10n.send) (⌘↩)")
+                .accessibilityLabel(L10n.send)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
+            HStack {
+                // Quiet and non-blocking: the brief forbids interrupting typing.
+                Text(draftIndicatorVisible ? L10n.draftSaved : " ")
+                    .animation(.easeInOut(duration: 0.2), value: draftIndicatorVisible)
+                Spacer()
+                Text("⌘↩ to send")
+                    .opacity(canSend ? 1 : 0)
+            }
+            .font(.system(size: 10.5))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 7)
         }
         .background(.bar)
         .onAppear { isFocused = true }
+        .onChange(of: chatID) { _, _ in isFocused = true }
     }
 }

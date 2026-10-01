@@ -110,8 +110,14 @@ let package = Package(
         // ── Tests ────────────────────────────────────────────────────────────
         .testTarget(
             name: "NodogramDomainTests",
-            dependencies: ["NodogramDomain"],
+            dependencies: ["NodogramDomain", "NodogramPlatform"],
             path: "Tests/Unit/Domain",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "NodogramCoreTests",
+            dependencies: ["NodogramCore", "NodogramDomain"],
+            path: "Tests/Unit/Core",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(

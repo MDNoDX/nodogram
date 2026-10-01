@@ -34,6 +34,37 @@ public enum Theme {
     public static let warning = Color(nsColor: .systemOrange)
     public static let failure = Color(nsColor: .systemRed)
 
+    /// Presence indicator. Paired with the word "online" in headers, so colour
+    /// is never the only signal.
+    public static let online = Color(nsColor: .systemGreen)
+
+    /// Bubble fills. Incoming uses a neutral system fill so it adapts to light,
+    /// dark and increased-contrast modes; outgoing carries the brand accent.
+    public static let bubbleIncoming = Color(nsColor: .unemphasizedSelectedContentBackgroundColor).opacity(0.55)
+    public static let bubbleOutgoing = accent.opacity(0.17)
+
+    private static let avatarPalette: [(Color, Color)] = [
+        (Color(red: 0.42, green: 0.47, blue: 0.86), Color(red: 0.32, green: 0.36, blue: 0.74)),
+        (Color(red: 0.25, green: 0.66, blue: 0.62), Color(red: 0.16, green: 0.52, blue: 0.50)),
+        (Color(red: 0.78, green: 0.42, blue: 0.64), Color(red: 0.64, green: 0.30, blue: 0.52)),
+        (Color(red: 0.90, green: 0.60, blue: 0.30), Color(red: 0.78, green: 0.46, blue: 0.20)),
+        (Color(red: 0.36, green: 0.58, blue: 0.84), Color(red: 0.24, green: 0.44, blue: 0.72)),
+        (Color(red: 0.60, green: 0.50, blue: 0.84), Color(red: 0.47, green: 0.38, blue: 0.72)),
+        (Color(red: 0.86, green: 0.44, blue: 0.40), Color(red: 0.72, green: 0.32, blue: 0.30)),
+    ]
+
+    /// Deterministic per id, so a chat keeps its colour across launches.
+    public static func avatarGradient(for seed: Int64) -> LinearGradient {
+        let pair = avatarPalette[Int(UInt64(bitPattern: seed) % UInt64(avatarPalette.count))]
+        return LinearGradient(colors: [pair.0, pair.1], startPoint: .top, endPoint: .bottom)
+    }
+
+    /// Sender-name colour in group chats, from the same palette, so a person's
+    /// name and initials avatar match.
+    public static func senderColor(for seed: Int64) -> Color {
+        avatarPalette[Int(UInt64(bitPattern: seed) % UInt64(avatarPalette.count))].1
+    }
+
     public enum Metrics {
         public static let sidebarMinWidth: CGFloat = 196
         public static let sidebarIdealWidth: CGFloat = 220
@@ -43,7 +74,7 @@ public enum Theme {
 
         public static let rowVerticalPadding: CGFloat = 7
         public static let rowHorizontalPadding: CGFloat = 10
-        public static let avatarSize: CGFloat = 38
+        public static let avatarSize: CGFloat = 44
         public static let cornerRadius: CGFloat = 7
     }
 

@@ -179,3 +179,69 @@ server ever sees message content. `SECURITY_MODEL.md` §1 still holds.
 is unavoidable and is how Telegram's own web clients operate, but it means the
 credentials identify the app publicly and could be abused by others, which risks
 the `api_id` being flagged. Recorded so the trade-off is deliberate.
+
+---
+
+## D9 — Messages deleted by others stay in place, marked deleted
+
+**Date:** 2026-10-01 · **Status:** settled, on by default at the user's request
+
+Every message the Mac receives is recorded in `MessageArchive`
+(Nodogram/Core/Archive). When Telegram reports a permanent deletion, the
+record is marked rather than dropped, and the conversation keeps the message
+where it was — dimmed, dash-bordered, with "Deleted · 18:42".
+
+**Honest limits, also shown in Settings → Privacy:** it cannot recover a
+message this Mac never received (sent and deleted while Nodogram was closed),
+and it does not undo the deletion on Telegram. TDLib cache evictions
+(`from_cache`) are never treated as deletions.
+
+**Protection:** content is AES-GCM encrypted under a Keychain key; only ids and
+dates are plaintext. Tests assert the text never appears in the database file
+and that a different key reads nothing. Ordinary records expire after 90 days;
+deleted ones per the user's retention choice (7 d / 30 d / 1 y / forever, the
+last behind a confirmation). "Erase Archive" removes everything and vacuums.
+
+---
+
+## D10 — Chats that forbid saving are honoured
+
+**Date:** 2026-10-01 · **Status:** settled
+
+When Telegram marks a message `can_be_saved = false` (the chat owner turned on
+"Restrict saving content"), Nodogram shows the media but offers no Save, Show in
+Finder, Copy or open-in-another-app. This is the owner's decision, Telegram's
+API terms require clients to respect it, and bypassing it would risk the
+user's `api_id` being banned. Every other chat has the full set of actions.
+
+---
+
+## D11 — Media playback architecture
+
+**Date:** 2026-10-01 · **Status:** settled, verified by tests
+
+- **Video streams** through `StreamingAssetLoader`: AVPlayer's byte-range
+  requests are answered by TDLib `downloadFile(offset, limit)` +
+  `readFilePart`, so seeking anywhere, ±10 s, and resuming mid-video start
+  without downloading what came before. TDLib returns early from a synchronous
+  download when another range is requested, so availability is re-checked with
+  `getFileDownloadedPrefixSize` rather than trusted. Tested with a generated
+  H.264 file and a source that refuses unprepared bytes.
+- **Voice messages** (OGG Opus) are demuxed in Swift and decoded by macOS's own
+  Opus decoder — no bundled codec. Round-trip tested with Apple's encoder.
+- **Resume positions** are keyed by Telegram's remote unique id, which is stable
+  across sessions (the numeric file id is not).
+- **Saving** copies into a user-chosen folder (default ~/Downloads/Nodogram);
+  TDLib's internal cache is never shown as the place to find files.
+
+---
+
+## D12 — Development builds get a stable code identity
+
+**Date:** 2026-10-01 · **Status:** settled until a Team ID is configured
+
+An ad-hoc signature's identity is the binary's hash, so every rebuild looked
+like a new app to the Keychain and macOS asked for the login password again.
+`Tools/build-app.sh` now pins the designated requirement to the bundle
+identifier. This is weaker than a certificate (another ad-hoc app could claim
+the identifier); setting `DEVELOPMENT_TEAM` replaces it with a real one.

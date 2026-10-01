@@ -24,7 +24,24 @@ public struct Chat: Identifiable, Hashable, Sendable {
     public var isMuted: Bool
     public var hasDraft: Bool
     public var isVerified: Bool
+    /// Position in the main chat list. `0` means "not in this list" — TDLib's
+    /// own convention, kept so the two can never disagree.
     public var order: Int64
+    /// Position in the archive list, with the same `0` convention.
+    public var archiveOrder: Int64
+    public var isMarkedAsUnread: Bool
+    /// Local path of the downloaded small avatar, once available.
+    public var avatarPath: String?
+    /// A tiny inline JPEG Telegram ships with every chat photo, usable as a
+    /// placeholder before the real avatar has downloaded.
+    public var avatarThumbnail: Data?
+    /// Online/last-seen state, for private chats only.
+    public var presence: UserPresence?
+    /// Draft text, as synced through Telegram, so it survives restarts and
+    /// appears on the user's other devices.
+    public var draftText: String?
+    /// The user's own chat with themselves, presented as "Saved Messages".
+    public var isSavedMessages: Bool
 
     public init(
         id: ChatID,
@@ -37,7 +54,14 @@ public struct Chat: Identifiable, Hashable, Sendable {
         isMuted: Bool = false,
         hasDraft: Bool = false,
         isVerified: Bool = false,
-        order: Int64 = 0
+        order: Int64 = 0,
+        archiveOrder: Int64 = 0,
+        isMarkedAsUnread: Bool = false,
+        avatarPath: String? = nil,
+        avatarThumbnail: Data? = nil,
+        presence: UserPresence? = nil,
+        draftText: String? = nil,
+        isSavedMessages: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -50,7 +74,18 @@ public struct Chat: Identifiable, Hashable, Sendable {
         self.hasDraft = hasDraft
         self.isVerified = isVerified
         self.order = order
+        self.archiveOrder = archiveOrder
+        self.isMarkedAsUnread = isMarkedAsUnread
+        self.avatarPath = avatarPath
+        self.avatarThumbnail = avatarThumbnail
+        self.presence = presence
+        self.draftText = draftText
+        self.isSavedMessages = isSavedMessages
     }
+
+    /// Unread state as the user perceives it: Telegram's count, or the explicit
+    /// "mark as unread" flag that has no count attached.
+    public var appearsUnread: Bool { unreadCount > 0 || isMarkedAsUnread }
 
     /// Group-like chats show the sender name in the list preview; private ones
     /// do not, because it would just repeat the chat title.
@@ -69,6 +104,8 @@ public struct MessagePreview: Hashable, Sendable {
     public let date: Date
     public let isOutgoing: Bool
     public let hasAttachment: Bool
+    /// Short label for non-text content ("Photo", "Voice message").
+    public let attachmentLabel: String?
 
     public init(
         messageID: MessageID,
@@ -76,7 +113,8 @@ public struct MessagePreview: Hashable, Sendable {
         senderName: String?,
         date: Date,
         isOutgoing: Bool,
-        hasAttachment: Bool = false
+        hasAttachment: Bool = false,
+        attachmentLabel: String? = nil
     ) {
         self.messageID = messageID
         self.text = text
@@ -84,6 +122,14 @@ public struct MessagePreview: Hashable, Sendable {
         self.date = date
         self.isOutgoing = isOutgoing
         self.hasAttachment = hasAttachment
+        self.attachmentLabel = attachmentLabel
+    }
+
+    /// What the chat list shows: the text, or the attachment label when a
+    /// message has no text of its own.
+    public var displayText: String {
+        if !text.isEmpty { return text }
+        return attachmentLabel ?? ""
     }
 }
 
@@ -108,7 +154,31 @@ public struct Message: Identifiable, Hashable, Sendable {
     public var isOutgoing: Bool
     public var sendState: MessageSendState?
     public var readDate: MessageReadDate?
+    /// Whether the recipient has read this outgoing message, from Telegram's
+    /// read-outbox marker. Known even when the exact time is not — which is
+    /// exactly why it is separate from `readDate`.
+    public var isReadByRecipient: Bool
     public var replyToMessageID: MessageID?
+    /// Short label for non-text content ("Photo", "Document · report.pdf").
+    public var attachmentLabel: String?
+    /// Formatting runs over `text` (bold, links, code…).
+    public var entities: [TextEntity]
+    /// Photo, video, voice and so on. `attachmentLabel` remains as a text
+    /// fallback for kinds that have no richer view.
+    public var media: MessageMedia?
+    /// False when the chat forbids saving content. Nodogram honours this: such
+    /// media can be viewed but not saved, revealed in Finder or copied.
+    public var canBeSaved: Bool
+    /// Messages sharing a non-zero album id were sent together.
+    public var albumID: Int64
+    /// Set when the sender deleted this message after this Mac received it.
+    /// Such a message exists only in Nodogram's local archive, never on
+    /// Telegram, and is always shown as deleted — never passed off as live.
+    public var deletedAt: Date?
+    /// A service event ("joined the group", "pinned a message") rather than
+    /// something a person wrote. Rendered as a centred line, not a bubble, and
+    /// `text` holds the action phrase without the actor's name.
+    public var isService: Bool
 
     public init(
         id: MessageID,
@@ -121,7 +191,15 @@ public struct Message: Identifiable, Hashable, Sendable {
         isOutgoing: Bool = false,
         sendState: MessageSendState? = nil,
         readDate: MessageReadDate? = nil,
-        replyToMessageID: MessageID? = nil
+        isReadByRecipient: Bool = false,
+        replyToMessageID: MessageID? = nil,
+        attachmentLabel: String? = nil,
+        isService: Bool = false,
+        entities: [TextEntity] = [],
+        media: MessageMedia? = nil,
+        canBeSaved: Bool = true,
+        albumID: Int64 = 0,
+        deletedAt: Date? = nil
     ) {
         self.id = id
         self.chatID = chatID
@@ -133,7 +211,25 @@ public struct Message: Identifiable, Hashable, Sendable {
         self.isOutgoing = isOutgoing
         self.sendState = sendState
         self.readDate = readDate
+        self.isReadByRecipient = isReadByRecipient
         self.replyToMessageID = replyToMessageID
+        self.attachmentLabel = attachmentLabel
+        self.isService = isService
+        self.entities = entities
+        self.media = media
+        self.canBeSaved = canBeSaved
+        self.albumID = albumID
+        self.deletedAt = deletedAt
+    }
+
+    public var isDeleted: Bool { deletedAt != nil }
+
+    /// Whether this message is still waiting on the server.
+    public var isPending: Bool {
+        switch sendState {
+        case .sending, .offlinePending: return true
+        default: return false
+        }
     }
 
     public var wasEdited: Bool { editDate != nil }

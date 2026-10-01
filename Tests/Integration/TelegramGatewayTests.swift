@@ -65,8 +65,10 @@ struct TelegramGatewayTests {
 
         let received: String? = await withTaskGroup(of: String?.self) { group in
             group.addTask {
-                for await event in gateway.events {
-                    if case .optionReceived(let name, let value) = event, name == "version" {
+                // Events arrive in per-frame batches; order within a batch is
+                // the order TDLib sent them.
+                for await batch in gateway.events {
+                    for case .optionReceived(let name, let value) in batch where name == "version" {
                         return value
                     }
                 }

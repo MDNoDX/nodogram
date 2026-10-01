@@ -1,184 +1,246 @@
 //  Conversation list.
+//
+//  Rows use hierarchical styles (.primary / .secondary) rather than fixed
+//  colours, so they stay legible inside macOS's own selection highlight.
 
 import SwiftUI
 import NodogramDomain
 import NodogramUI
 
 public struct ChatListView: View {
-    private let chats: [Chat]
-    private let destination: SidebarDestination
-    @Binding private var selectedChatID: ChatID?
-    @Binding private var searchText: String
+    private let model: AppModel
 
-    public init(
-        chats: [Chat],
-        destination: SidebarDestination,
-        selectedChatID: Binding<ChatID?>,
-        searchText: Binding<String>
-    ) {
-        self.chats = chats
-        self.destination = destination
-        self._selectedChatID = selectedChatID
-        self._searchText = searchText
+    public init(model: AppModel) {
+        self.model = model
     }
 
     public var body: some View {
+        let chats = model.visibleChats
+
         Group {
-            if chats.isEmpty {
+            if !model.destinationIsChatList {
                 EmptyStateView(
-                    icon: "bubble.left.and.bubble.right",
-                    title: L10n.noChatsTitle,
-                    message: L10n.noChatsBody
+                    icon: model.selectedDestination.icon,
+                    title: model.selectedDestination.title,
+                    message: "This section is planned for a later version of Nodogram. Your chats are under All Chats."
                 )
+            } else if chats.isEmpty {
+                if model.isLoadingChats || (model.chatsByID.isEmpty && model.searchText.isEmpty) {
+                    LoadingChatsView()
+                } else {
+                    EmptyStateView(
+                        icon: model.searchText.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
+                        title: model.searchText.isEmpty ? emptyTitle : L10n.noSearchResults,
+                        message: model.searchText.isEmpty ? emptyMessage : "No chat matches “\(model.searchText)”."
+                    )
+                }
             } else {
-                List(chats, selection: $selectedChatID) { chat in
-                    ChatRow(chat: chat).tag(chat.id)
+                List(selection: Binding(get: { model.selectedChatID }, set: { model.select($0) })) {
+                    ForEach(chats) { chat in
+                        ChatRow(chat: chat, activity: model.activityText(for: chat.id))
+                            .tag(chat.id)
+                            .onAppear {
+                                model.ensureAvatar(for: chat.id)
+                                // Page in more chats as the end comes into view.
+                                if chat.id == chats.last?.id {
+                                    model.loadMoreChats(in: model.selectedDestination == .archived ? .archive : .main)
+                                }
+                            }
+                    }
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
             }
         }
-        .navigationTitle(destination.title)
-        .searchable(text: $searchText, placement: .toolbar, prompt: "Search")
+        .navigationTitle(model.selectedDestination.title)
+        .searchable(
+            text: Binding(get: { model.searchText }, set: { model.searchText = $0 }),
+            placement: .toolbar,
+            prompt: "Search chats"
+        )
+    }
+
+    private var emptyTitle: String {
+        switch model.selectedDestination {
+        case .unread: return "You're all caught up"
+        case .drafts: return "No drafts"
+        case .archived: return "Archive is empty"
+        case .saved: return "Saved Messages"
+        default: return L10n.noChatsTitle
+        }
+    }
+
+    private var emptyMessage: String {
+        switch model.selectedDestination {
+        case .unread: return "Chats with unread messages appear here."
+        case .drafts: return "Start typing in any chat and it appears here, so nothing half-written gets lost."
+        case .archived: return "Chats you archive in Telegram appear here."
+        case .saved: return "Your Saved Messages chat appears here once it has loaded."
+        case .personal: return "One-to-one chats appear here."
+        case .groups: return "Group chats appear here."
+        case .channels: return "Channels you follow appear here."
+        default: return L10n.noChatsBody
+        }
     }
 }
 
-struct ChatRow: View {
+private struct ChatRow: View {
     let chat: Chat
-
-    private var timestamp: String {
-        guard let date = chat.lastMessage?.date else { return "" }
-        return RelativeTimeFormatter.short(date)
-    }
+    /// "typing…" — shown in place of the preview, as Telegram does.
+    let activity: String?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            Avatar(title: chat.title, seed: chat.id.rawValue)
+        HStack(alignment: .top, spacing: 10) {
+            Avatar(
+                title: chat.title,
+                seed: chat.id.rawValue,
+                imagePath: chat.avatarPath,
+                thumbnail: chat.avatarThumbnail,
+                isOnline: chat.presence == .online,
+                isSavedMessages: chat.isSavedMessages
+            )
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(chat.title)
-                        .font(Theme.Typography.chatTitle)
+                        .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
 
                     if chat.isVerified {
                         Image(systemName: "checkmark.seal.fill")
-                            .font(.system(size: 9))
+                            .font(.system(size: 10))
                             .foregroundStyle(Theme.accent)
                             .accessibilityLabel("Verified")
                     }
-
-                    Spacer(minLength: 4)
-
-                    Text(timestamp)
-                        .font(Theme.Typography.timestamp)
-                        .foregroundStyle(Theme.tertiaryText)
-                }
-
-                HStack(spacing: 4) {
-                    if chat.hasDraft {
-                        // Text label, not just colour — the draft indicator has
-                        // to survive colour-blindness and greyscale.
-                        Text("Draft")
-                            .font(Theme.Typography.timestamp)
-                            .foregroundStyle(Theme.warning)
-                    }
-
-                    if chat.lastMessage?.hasAttachment == true {
-                        Image(systemName: "paperclip")
-                            .font(.system(size: 9))
-                            .foregroundStyle(Theme.secondaryText)
-                            .accessibilityLabel("Has attachment")
-                    }
-
-                    Text(previewText)
-                        .font(Theme.Typography.chatPreview)
-                        .foregroundStyle(Theme.secondaryText)
-                        .lineLimit(1)
-
-                    Spacer(minLength: 4)
-
                     if chat.isMuted {
-                        Image(systemName: "bell.slash")
+                        Image(systemName: "speaker.slash.fill")
                             .font(.system(size: 9))
-                            .foregroundStyle(Theme.tertiaryText)
+                            .foregroundStyle(.tertiary)
                             .accessibilityLabel("Muted")
                     }
 
-                    if chat.isPinned {
-                        Image(systemName: "pin.fill")
-                            .font(.system(size: 9))
-                            .foregroundStyle(Theme.tertiaryText)
-                            .accessibilityLabel("Pinned")
-                    }
+                    Spacer(minLength: 6)
 
-                    if chat.unreadCount > 0 {
-                        UnreadBadge(count: chat.unreadCount, isMuted: chat.isMuted)
+                    if let date = chat.lastMessage?.date {
+                        Text(RelativeTimeFormatter.short(date))
+                            .font(.system(size: 11))
+                            .foregroundStyle(chat.appearsUnread && !chat.isMuted ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
+                            .help(RelativeTimeFormatter.exact(date))
                     }
+                }
+
+                HStack(alignment: .top, spacing: 6) {
+                    preview
+                        .font(.system(size: 12))
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    trailingBadges
                 }
             }
         }
-        .padding(.vertical, Theme.Metrics.rowVerticalPadding)
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityDescription)
     }
 
-    private var previewText: String {
-        guard let last = chat.lastMessage else { return "" }
-        if chat.showsSenderInPreview, let sender = last.senderName {
-            return "\(sender): \(last.text)"
+    /// Draft first (it is the user's own unsent work), then the last message
+    /// with its sender, then the attachment label for media.
+    private var preview: Text {
+        if let activity {
+            return Text(activity).foregroundStyle(Theme.accent)
         }
-        return last.text
+        if let draft = chat.draftText, !draft.isEmpty {
+            return Text("Draft: ").foregroundStyle(Theme.failure) + Text(draft).foregroundStyle(.secondary)
+        }
+        guard let last = chat.lastMessage else {
+            return Text("No messages yet").foregroundStyle(.tertiary)
+        }
+
+        var result = Text("")
+        if let sender = last.senderName, !sender.isEmpty {
+            result = result + Text("\(sender): ").foregroundStyle(.primary)
+        }
+        if let label = last.attachmentLabel {
+            let separator = last.text.isEmpty ? "" : " · "
+            result = result + Text(label + separator).foregroundStyle(Theme.accent)
+        }
+        return result + Text(last.text).foregroundStyle(.secondary)
     }
 
-    /// A single spoken sentence, so VoiceOver does not read each badge
-    /// separately as unlabelled noise.
+    @ViewBuilder
+    private var trailingBadges: some View {
+        HStack(spacing: 4) {
+            if chat.unreadMentionCount > 0 {
+                Text("@")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 19, height: 19)
+                    .background(Theme.accent, in: Circle())
+                    .accessibilityLabel("Mentioned")
+            }
+
+            if chat.unreadCount > 0 {
+                Text(chat.unreadCount > 9_999 ? "9999+" : "\(chat.unreadCount)")
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .frame(minWidth: 19, minHeight: 19)
+                    .background(chat.isMuted ? AnyShapeStyle(Color.gray.opacity(0.6)) : AnyShapeStyle(Theme.accent), in: Capsule())
+            } else if chat.isMarkedAsUnread {
+                Circle()
+                    .fill(Theme.accent)
+                    .frame(width: 10, height: 10)
+                    .padding(4)
+                    .accessibilityLabel("Marked as unread")
+            } else if chat.isPinned {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(45))
+                    .padding(.top, 2)
+                    .accessibilityLabel("Pinned")
+            }
+        }
+    }
+
+    /// One spoken sentence, so VoiceOver does not read badges as noise.
     private var accessibilityDescription: String {
         var parts = [chat.title]
         if chat.unreadCount > 0 { parts.append("\(chat.unreadCount) unread") }
-        if chat.hasDraft { parts.append("has draft") }
+        if chat.unreadMentionCount > 0 { parts.append("mentioned") }
+        if chat.hasDraft { parts.append("has a draft") }
         if chat.isMuted { parts.append("muted") }
-        if !previewText.isEmpty { parts.append(previewText) }
+        if chat.isPinned { parts.append("pinned") }
+        if let last = chat.lastMessage {
+            parts.append([last.senderName, last.displayText].compactMap { $0 }.joined(separator: ": "))
+        }
         return parts.joined(separator: ", ")
     }
 }
 
-struct UnreadBadge: View {
-    let count: Int
-    let isMuted: Bool
-
+/// Shape-matched placeholder, so the list does not jump when rows arrive.
+private struct LoadingChatsView: View {
     var body: some View {
-        Text(count > 999 ? "999+" : "\(count)")
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(isMuted ? Theme.tertiaryText : Theme.accent, in: Capsule())
-    }
-}
-
-/// Intelligent, locale-aware time formatting (brief §66).
-public enum RelativeTimeFormatter {
-    public static func short(_ date: Date, now: Date = Date()) -> String {
-        let calendar = Calendar.current
-
-        if calendar.isDateInToday(date) {
-            return date.formatted(.dateTime.hour().minute())
+        VStack(spacing: 0) {
+            ForEach(0..<9, id: \.self) { index in
+                HStack(spacing: 10) {
+                    Circle().fill(.quaternary).frame(width: 44, height: 44)
+                    VStack(alignment: .leading, spacing: 7) {
+                        RoundedRectangle(cornerRadius: 3).fill(.quaternary)
+                            .frame(width: CGFloat(90 + (index * 37) % 80), height: 10)
+                        RoundedRectangle(cornerRadius: 3).fill(.quaternary.opacity(0.7))
+                            .frame(width: CGFloat(150 + (index * 53) % 70), height: 9)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+            }
+            Spacer()
         }
-        if calendar.isDateInYesterday(date) {
-            return "Yesterday"
-        }
-        // Within the last week, the weekday is more useful than a date.
-        if let days = calendar.dateComponents([.day], from: date, to: now).day, days < 7 {
-            return date.formatted(.dateTime.weekday(.abbreviated))
-        }
-        if calendar.isDate(date, equalTo: now, toGranularity: .year) {
-            return date.formatted(.dateTime.month(.abbreviated).day())
-        }
-        return date.formatted(.dateTime.year().month(.abbreviated).day())
-    }
-
-    /// The exact value, shown on hover (brief §66).
-    public static func exact(_ date: Date) -> String {
-        date.formatted(date: .complete, time: .standard)
+        .padding(.top, 6)
+        .accessibilityLabel("Loading chats")
     }
 }
