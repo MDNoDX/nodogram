@@ -130,41 +130,52 @@ needs a real Developer ID, which is a packaging-phase concern.
 
 ---
 
-## D8 — Nodogram cannot be deployed to Vercel (or any web host)
+## D8 — The macOS app cannot go on Vercel; a web client can
 
-**Date:** 2026-10-01 · **Status:** settled, by physics rather than preference
+**Date:** 2026-10-01 · **Status:** settled · **Corrected** the same day
 
-Deploying Nodogram to Vercel was requested and is not possible. Three
-independent blockers, any one of which is sufficient:
+**What was right.** The *macOS app* cannot be deployed to Vercel. It is an
+`arm64` Mach-O binary built on SwiftUI and AppKit; Vercel runs Node.js on Linux,
+where those frameworks do not exist. That part stands.
 
-1. **Platform.** Nodogram is an `arm64` macOS Mach-O binary built on SwiftUI and
-   AppKit. Vercel executes Node.js, Python, Go and Ruby on Linux. SwiftUI and
-   AppKit do not exist outside Apple platforms, so the entire UI layer has no
-   target to run on. This is not a porting task; it is a rewrite.
+**What was wrong.** The original decision generalised that into "Nodogram cannot
+be deployed to any web host", and claimed the Telegram layer always needs a
+long-lived stateful process. That is false for a browser client:
 
-2. **Statefulness.** Even a rewritten web client could not put *TDLib* on
-   Vercel. TDLib requires a long-lived process that continuously calls
-   `td_receive`, plus a persistent database directory. Vercel's functions are
-   stateless and ephemeral, and their filesystem does not survive between
-   invocations. Vercel could host a frontend; it cannot host the Telegram layer.
+- **TDLib officially compiles to WebAssembly** (`tdweb`, in TDLib's own
+  repository), running entirely in the browser with persistent storage.
+- **GramJS** (`telegram` on npm) implements MTProto in pure TypeScript and runs
+  in the browser.
 
-3. **There is no database to connect.** TDLib owns its own encrypted store, and
-   Nodogram's local-only data — drafts, draft history, notes, bookmarks, the
-   deletion archive — lives in SQLite on the user's Mac *by design*
-   (`SECURITY_MODEL.md` §1, `DATA_MODEL.md`). Moving it to a hosted database
-   would invert the privacy model the product is built around: the archive in
-   particular can contain messages senders believed were deleted, and putting
-   that on a shared server is precisely what the design refuses to do.
+Either removes the need for a backend entirely, which makes a Vercel-only
+deployment genuinely possible. Telegram's own web clients work this way.
 
-**Consequence — the closest correct alternative.** Distribution happens through
-GitHub: `.github/workflows/build.yml` builds, tests and packages the app on
-every push, and attaches a downloadable `.app` to tagged releases. That gives
-"install it from GitHub on any Mac", which is the deployable form this product
-actually has.
+**Chosen foundation: GramJS.** Measured against the alternatives:
 
-**If browser or server access is genuinely required**, that is a different
-product: a web client, with a Next.js frontend (which *can* live on Vercel) and
-a TDLib backend on a stateful host with a persistent volume — Fly.io, Railway,
-Render or a VPS. It is a substantial separate project, and it changes the
-privacy model, because local-only data would then live on a server. That
-trade-off must be decided deliberately, not inherited by accident.
+| Option | Vercel-only | Protocol currency | Verdict |
+|---|---|---|---|
+| Official `tdweb` | yes | **1.8.0, published 2021-12-30** — ~5 years stale | rejected |
+| `@dibgram/tdweb` | yes | 1.8.40 (2024-11-21), unofficial prebuild | rejected |
+| **GramJS (`telegram`)** | **yes** | **2.26.22 (2025-02-12), actively maintained** | **chosen** |
+| Next.js + TDLib backend | no — needs a second stateful host | 1.8.67 | rejected |
+
+The tdweb builds are stale and unofficial, and depend on one maintainer running
+Emscripten 3.1.1 by hand. GramJS is current, widely used, and ships its own
+browser build.
+
+**Consequence.** The web client is a *separate product* in `web/`, sharing the
+domain vocabulary and visual identity of the macOS app but not its code — Swift
+and TypeScript cannot share an implementation. It gives up TDLib's built-in
+local database and ordered-update guarantees, which we therefore implement
+ourselves over IndexedDB.
+
+**Privacy is preserved**, and this is why a browser client is acceptable at all:
+local-only data (drafts, draft history, notes, bookmarks, the deletion archive)
+lives in the user's own browser via IndexedDB, not on a server. No Nodogram
+server ever sees message content. `SECURITY_MODEL.md` §1 still holds.
+
+**One honest cost.** In any browser-based Telegram client the `api_id` and
+`api_hash` are shipped in the JavaScript bundle and are therefore public. This
+is unavoidable and is how Telegram's own web clients operate, but it means the
+credentials identify the app publicly and could be abused by others, which risks
+the `api_id` being flagged. Recorded so the trade-off is deliberate.

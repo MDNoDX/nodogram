@@ -1,0 +1,163 @@
+@import "tailwindcss";
+
+/*
+ * Nodogram's visual identity.
+ *
+ * Original palette, deliberately not Telegram's (#2AABEE / #229ED9). The accent
+ * is the same slate-indigo as the macOS app, so the two clients read as one
+ * product.
+ *
+ * Every colour is a token, and dark mode redefines the tokens rather than
+ * sprinkling `dark:` variants through the markup — that way a component cannot
+ * accidentally be styled for one theme only.
+ */
+
+:root {
+  --accent: oklch(0.55 0.15 275);
+  --accent-hover: oklch(0.50 0.16 275);
+  --accent-soft: oklch(0.55 0.15 275 / 0.12);
+  --accent-contrast: oklch(0.99 0 0);
+
+  --bg: oklch(0.99 0.002 275);
+  --bg-sidebar: oklch(0.965 0.004 275);
+  --bg-list: oklch(0.985 0.003 275);
+  --bg-elevated: oklch(1 0 0);
+  --bg-hover: oklch(0.95 0.006 275);
+
+  --text: oklch(0.22 0.01 275);
+  --text-secondary: oklch(0.50 0.012 275);
+  --text-tertiary: oklch(0.65 0.01 275);
+
+  --border: oklch(0.90 0.006 275);
+  --border-strong: oklch(0.84 0.008 275);
+
+  --bubble-in: oklch(0.96 0.004 275);
+  --bubble-out: oklch(0.55 0.15 275 / 0.13);
+
+  --success: oklch(0.62 0.15 150);
+  --warning: oklch(0.70 0.15 70);
+  --danger: oklch(0.58 0.20 25);
+
+  --radius: 10px;
+  --radius-sm: 7px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --accent: oklch(0.68 0.14 275);
+    --accent-hover: oklch(0.73 0.14 275);
+    --accent-soft: oklch(0.68 0.14 275 / 0.18);
+    --accent-contrast: oklch(0.15 0.01 275);
+
+    --bg: oklch(0.17 0.008 275);
+    --bg-sidebar: oklch(0.14 0.008 275);
+    --bg-list: oklch(0.19 0.008 275);
+    --bg-elevated: oklch(0.22 0.009 275);
+    --bg-hover: oklch(0.25 0.010 275);
+
+    --text: oklch(0.95 0.004 275);
+    --text-secondary: oklch(0.72 0.008 275);
+    --text-tertiary: oklch(0.55 0.008 275);
+
+    --border: oklch(0.27 0.010 275);
+    --border-strong: oklch(0.35 0.012 275);
+
+    --bubble-in: oklch(0.24 0.010 275);
+    --bubble-out: oklch(0.68 0.14 275 / 0.22);
+  }
+}
+
+:root[data-theme="dark"] {
+  --accent: oklch(0.68 0.14 275);
+  --accent-hover: oklch(0.73 0.14 275);
+  --accent-soft: oklch(0.68 0.14 275 / 0.18);
+  --accent-contrast: oklch(0.15 0.01 275);
+
+  --bg: oklch(0.17 0.008 275);
+  --bg-sidebar: oklch(0.14 0.008 275);
+  --bg-list: oklch(0.19 0.008 275);
+  --bg-elevated: oklch(0.22 0.009 275);
+  --bg-hover: oklch(0.25 0.010 275);
+
+  --text: oklch(0.95 0.004 275);
+  --text-secondary: oklch(0.72 0.008 275);
+  --text-tertiary: oklch(0.55 0.008 275);
+
+  --border: oklch(0.27 0.010 275);
+  --border-strong: oklch(0.35 0.012 275);
+
+  --bubble-in: oklch(0.24 0.010 275);
+  --bubble-out: oklch(0.68 0.14 275 / 0.22);
+}
+
+@theme inline {
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-bg: var(--bg);
+  --color-bg-sidebar: var(--bg-sidebar);
+  --color-bg-list: var(--bg-list);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-bg-hover: var(--bg-hover);
+  --color-text: var(--text);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-bubble-in: var(--bubble-in);
+  --color-bubble-out: var(--bubble-out);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+               system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* Quiet, unobtrusive scrollbars — the content matters, not the chrome. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+/* Focus must always be visible for keyboard users. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Honour the user's motion preference rather than overriding it. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@keyframes nodogram-fade-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: none; }
+}
+.animate-fade-in { animation: nodogram-fade-in 140ms ease-out; }
