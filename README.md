@@ -35,6 +35,7 @@ TDLib before committing to a design.
 | [SECURITY_MODEL.md](Documentation/SECURITY_MODEL.md) | Threat model, key hierarchy, archive risk |
 | [LEGAL_AND_LICENSES.md](Documentation/LEGAL_AND_LICENSES.md) | License decision record, attribution, trademark |
 | [UPSTREAM.md](Documentation/UPSTREAM.md) | Pinned versions and the upgrade procedure |
+| [DECISIONS.md](Documentation/DECISIONS.md) | Settled decisions and their consequences |
 
 ---
 
