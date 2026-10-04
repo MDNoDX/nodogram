@@ -9,6 +9,7 @@ import NodogramUI
 
 public struct ChatListView: View {
     private let model: AppModel
+    @AppStorage("chatList.showFolderTags") private var showFolderTags = false
 
     public init(model: AppModel) {
         self.model = model
@@ -34,14 +35,15 @@ public struct ChatListView: View {
                 List(selection: Binding(get: { model.selectedChatID }, set: { model.select($0) })) {
                     ForEach(chats) { chat in
                         ChatRow(chat: chat, activity: model.activityText(for: chat.id),
-                                hasStories: model.storyOwners[chat.id]?.hasUnread == true)
+                                hasStories: model.storyOwners[chat.id]?.hasUnread == true,
+                                folderTags: showFolderTags && model.selectedFolderID == nil ? model.folderTitles(for: chat) : [])
                             .tag(chat.id)
                             .contextMenu { ChatMenu(model: model, chat: chat) }
                             .onAppear {
                                 model.ensureAvatar(for: chat.id)
                                 // Page in more chats as the end comes into view.
                                 if chat.id == chats.last?.id {
-                                    model.loadMoreChats(in: model.selectedDestination == .archived ? .archive : .main)
+                                    model.loadMoreChats(in: model.selectedFolderID.map { .folder($0) } ?? (model.selectedDestination == .archived ? .archive : .main))
                                 }
                             }
                     }
@@ -55,7 +57,8 @@ public struct ChatListView: View {
                 }
             }
         }
-        .navigationTitle(model.selectedDestination.title)
+        .navigationTitle(model.selectedFolderID.flatMap { id in model.folders.first { $0.id == id }?.title }
+                         ?? model.selectedDestination.title)
         .searchable(
             text: Binding(get: { model.searchText }, set: { model.searchText = $0 }),
             placement: .toolbar,
@@ -93,6 +96,9 @@ struct ChatRow: View {
     let activity: String?
     /// Unseen stories: the avatar gets a ring, as in Telegram.
     var hasStories = false
+    /// Names of the folders the chat is in, when folder tags are on.
+    var folderTags: [String] = []
+    @AppStorage("privacy.streamerMode") private var streamerMode = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -139,10 +145,22 @@ struct ChatRow: View {
                     }
                 }
 
+                if !folderTags.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(folderTags.prefix(3), id: \.self) { tag in
+                            Text(tag).font(.system(size: 9.5, weight: .semibold))
+                                .foregroundStyle(Theme.accent)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Theme.accent.opacity(0.12), in: Capsule())
+                        }
+                    }
+                }
+
                 HStack(alignment: .top, spacing: 6) {
                     preview
                         .font(.system(size: 12))
                         .lineLimit(2)
+                        .blur(radius: streamerMode ? 5 : 0)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     trailingBadges
@@ -254,6 +272,18 @@ struct ChatMenu: View {
             Button { model.setArchived(!isArchived, chat: chat.id) } label: {
                 Label(isArchived ? "Unarchive" : "Archive", systemImage: isArchived ? "tray.and.arrow.up" : "archivebox")
             }
+        }
+        if !model.folders.isEmpty {
+            Menu {
+                ForEach(model.folders) { folder in
+                    let inFolder = chat.folderOrders[folder.id] != nil
+                    Button {
+                        model.setChat(chat.id, inFolder: folder.id, included: !inFolder)
+                    } label: {
+                        Label(folder.title, systemImage: inFolder ? "checkmark" : FolderIcon.symbol(for: folder.iconName))
+                    }
+                }
+            } label: { Label("Folders", systemImage: "folder") }
         }
         if model.storyOwners[chat.id] != nil {
             Divider()

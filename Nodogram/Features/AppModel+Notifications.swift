@@ -51,7 +51,10 @@ extension AppModel {
             switch response {
             case .open(let chatID, let messageID):
                 self.selectedDestination = .allChats
-                self.jump(to: MessageID(messageID), in: ChatID(chatID))
+                NSApp.activate()
+                // Typing and story notifications carry no message.
+                if messageID == 0 { self.select(ChatID(chatID)) }
+                else { self.jump(to: MessageID(messageID), in: ChatID(chatID)) }
             case .reply(let chatID, let text):
                 guard let gateway = self.gateway else { return }
                 Task { try? await gateway.sendText(text, to: ChatID(chatID)) }

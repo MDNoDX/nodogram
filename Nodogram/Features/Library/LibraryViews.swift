@@ -21,6 +21,9 @@ struct LibrarySectionView: View {
         case .starred: StarredList(model: model)
         case .recentlyViewed: RecentChatsList(model: model)
         case .localArchive: LocalArchiveList(model: model)
+        case .typingLog: TypingLogView(model: model)
+        case .storyViews: StoryViewsView(model: model)
+        case .myActivity: MyActivityView(model: model)
         default:
             EmptyStateView(icon: model.selectedDestination.icon, title: model.selectedDestination.title,
                            message: "Choose a section in the sidebar.")
@@ -476,58 +479,127 @@ private struct RecentChatsList: View {
     }
 }
 
-// MARK: - Local archive
+// MARK: - Deleted messages
 
 private struct LocalArchiveList: View {
     let model: AppModel
 
     @State private var items: [Message] = []
     @State private var loaded = false
+    @State private var query = ""
+
+    private var filtered: [Message] {
+        guard !query.isEmpty else { return items }
+        return items.filter {
+            $0.text.localizedCaseInsensitiveContains(query) || $0.senderName.localizedCaseInsensitiveContains(query)
+                || model.chatTitle($0.chatID).localizedCaseInsensitiveContains(query)
+        }
+    }
 
     var body: some View {
         Group {
             if !model.keepsDeletedMessages {
                 VStack(spacing: 14) {
                     EmptyStateView(
-                        icon: "clock.arrow.circlepath", title: "Local Archive is off",
-                        message: """
-                            When on, Nodogram keeps a private, encrypted copy on this Mac of messages \
-                            others delete. Self-destructing and protected messages are never kept.
-                            """)
-                    SettingsLink { Text("Open Settings…") }
+                        icon: "trash.circle", title: "Keeping deleted messages is off",
+                        message: "Turn it on to keep a private, encrypted copy of messages others delete. Self-destructing and protected messages are never kept.")
+                    Button("Turn On") {
+                        UserDefaults.standard.set(true, forKey: AppModel.keepDeletedKey)
+                        model.settingsPage = .nodogramFeatures
+                        model.selectedDestination = .settings
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
                 .padding(.bottom, 40)
             } else if loaded, items.isEmpty {
-                EmptyStateView(icon: "trash.slash", title: "No deleted messages",
-                               message: "Messages deleted by their senders after this Mac received them appear here.")
+                EmptyStateView(icon: "trash.slash", title: "Nothing deleted yet",
+                               message: "When someone deletes a message this Mac received, it stays in the chat marked “Deleted” and appears here.")
             } else {
-                List(items, id: \.uniqueKey) { message in
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack {
-                            Text(model.chatTitle(message.chatID)).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                            Spacer()
-                            if let deletedAt = message.deletedAt {
-                                Label(RelativeTimeFormatter.short(deletedAt), systemImage: "trash")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(Theme.failure)
-                            }
-                        }
-                        Text([message.senderName, message.attachmentLabel ?? "", message.text]
-                                .filter { !$0.isEmpty }.joined(separator: " · "))
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(3)
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("\(items.count) deleted messages").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                        Spacer()
+                        TextField("Search", text: $query).textFieldStyle(.roundedBorder).frame(maxWidth: 150)
                     }
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.jump(to: message.id, in: message.chatID) }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    Divider()
+                    List(filtered, id: \.uniqueKey) { message in
+                        DeletedRow(model: model, message: message)
+                    }
+                    .listStyle(.inset)
                 }
-                .listStyle(.inset)
             }
         }
         .task {
+            model.markDeletedSeen()
             items = await model.locallyArchivedMessages()
             loaded = true
+        }
+        .onChange(of: model.unseenDeletedCount) { _, count in
+            guard count > 0 else { return }
+            model.markDeletedSeen()
+            Task { items = await model.locallyArchivedMessages() }
+        }
+    }
+}
+
+private struct DeletedRow: View {
+    let model: AppModel
+    let message: Message
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            let chat = model.chatsByID[message.chatID]
+            Avatar(title: message.senderName.isEmpty ? model.chatTitle(message.chatID) : message.senderName,
+                   seed: message.senderID?.rawValue ?? message.chatID.rawValue, size: 34,
+                   imagePath: message.senderID == nil ? chat?.avatarPath : nil)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 4) {
+                    Text(message.isOutgoing ? "You" : (message.senderName.isEmpty ? model.chatTitle(message.chatID) : message.senderName))
+                        .font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    if !message.senderName.isEmpty, model.chatTitle(message.chatID) != message.senderName {
+                        Text("in \(model.chatTitle(message.chatID))").font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                }
+                Group {
+                    if let label = message.attachmentLabel {
+                        Text(label + (message.text.isEmpty ? "" : " · ")).foregroundStyle(Theme.accent)
+                            + Text(message.text)
+                    } else {
+                        Text(message.text)
+                    }
+                }
+                .font(.system(size: 12.5))
+                .lineLimit(6)
+                .textSelection(.enabled)
+                HStack(spacing: 8) {
+                    Label("sent \(RelativeTimeFormatter.short(message.date))", systemImage: "paperplane")
+                    if let deletedAt = message.deletedAt {
+                        Label("deleted \(RelativeTimeFormatter.short(deletedAt))", systemImage: "trash")
+                            .foregroundStyle(Theme.failure)
+                            .help(RelativeTimeFormatter.exact(deletedAt))
+                    }
+                }
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            model.selectedDestination = .allChats
+            model.jump(to: message.id, in: message.chatID)
+        }
+        .contextMenu {
+            Button("Show in Chat") {
+                model.selectedDestination = .allChats
+                model.jump(to: message.id, in: message.chatID)
+            }
+            Button("Copy Text") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(message.text, forType: .string)
+            }
         }
     }
 }

@@ -47,8 +47,19 @@ public final class AppModel {
     public private(set) var isLoadingChats = false
     public private(set) var myUserID: UserID?
     public var selectedDestination: SidebarDestination = .allChats {
-        didSet { if selectedDestination == .archived { loadMoreChats(in: .archive) } }
+        didSet {
+            selectedFolderID = nil
+            if selectedDestination == .archived { loadMoreChats(in: .archive) }
+        }
     }
+    /// The user's Telegram chat folders, in their order.
+    public internal(set) var folders: [ChatFolderSummary] = []
+    /// A Telegram folder shown in the chat list, when one is selected.
+    public internal(set) var selectedFolderID: Int?
+    /// The page open in Settings (shown in the window, like Telegram's).
+    public var settingsPage: SettingsPage = .profile
+    /// Sidebar items the user hid, and the order of the built-in ones.
+    public internal(set) var sidebarPrefs = SidebarPrefs.load()
     public var searchText: String = ""
 
     // MARK: Conversation
@@ -155,6 +166,17 @@ public final class AppModel {
     /// target, so the chat's default "latest page" load does not replace it.
     var pendingJumpID: MessageID?
     var archiveDirectory: URL?
+    /// Who started typing to the user, when, and whether they sent anything.
+    public internal(set) var typingLog: [TypingEvent] = TypingEvent.loadAll()
+    public internal(set) var unseenTypingCount = 0
+    /// Messages others deleted since the user last looked at the Deleted section.
+    public internal(set) var unseenDeletedCount = 0
+    /// Everyone who viewed the user's stories, kept after Telegram forgets.
+    public internal(set) var storyViewers: [StoryViewer] = StoryViewersStore.load()
+    var openTypingSessions: [String: UUID] = [:]
+    var typingNotifiedAt: [ChatID: Date] = [:]
+    var typingSweepTask: Task<Void, Never>?
+    var storyPollTask: Task<Void, Never>?
     /// Messages the user starred, newest first. Local to this Mac.
     public var starred: [StarredMessage] = StarredMessage.loadAll()
     /// Chats opened recently, newest first — the Recently Viewed section.
@@ -168,9 +190,12 @@ public final class AppModel {
 
     /// Destinations that are real chat lists. The rest are later phases and
     /// say so, rather than showing an unrelated list.
-    public var destinationIsChatList: Bool { filter(for: selectedDestination) != nil || selectedDestination == .saved }
+    public var destinationIsChatList: Bool {
+        selectedFolderID != nil || filter(for: selectedDestination) != nil || selectedDestination == .saved
+    }
 
     public var visibleChats: [Chat] {
+        if let folderID = selectedFolderID { return chats(inFolder: folderID) }
         if selectedDestination == .saved {
             guard let me = myUserID, let saved = chatsByID[ChatID(me.rawValue)] else { return [] }
             return [saved]
@@ -273,6 +298,8 @@ public final class AppModel {
 
         case .messageAdded(let message):
             record([message])
+            noteMessageForTyping(message)
+            checkKeywords(message)
             appendToCommentsIfNeeded(message)
             guard message.chatID == selectedChatID,
                   !messages.contains(where: { $0.id == message.id }) else { return }
@@ -295,6 +322,9 @@ public final class AppModel {
             handleDeletion(chatID: chatID, ids: ids)
 
         case .messageContentChanged(let chatID, let messageID, let text, let label):
+            if keepsDeletedMessages, let archive {
+                Task.detached { await archive.recordEdit(chatID: chatID, messageID: messageID, text: text) }
+            }
             guard chatID == selectedChatID,
                   let index = messages.firstIndex(where: { $0.id == messageID }) else { return }
             messages[index].text = text
@@ -322,6 +352,10 @@ public final class AppModel {
         case .notificationsRemoved(let groupID, let ids):
             SystemNotifications.shared.remove(groupID: groupID, ids: ids)
 
+        case .foldersChanged(let folders, _):
+            self.folders = folders
+            if let id = selectedFolderID, !folders.contains(where: { $0.id == id }) { selectedFolderID = nil }
+
         case .pollUpdated(let poll):
             for index in messages.indices where messages[index].poll?.id == poll.id {
                 let details = messages[index].poll?.details ?? ""
@@ -335,6 +369,7 @@ public final class AppModel {
             }
 
         case .chatActivity(let chatID, let user, let activity):
+            noteTyping(chatID: chatID, user: user, activity: activity)
             if let activity {
                 activities[chatID, default: [:]][user] = (activity, Date())
                 scheduleActivityPrune()
@@ -390,6 +425,7 @@ public final class AppModel {
         loadMoreChats(in: .main)
         Task { await gateway.enableNotifications() }
         Task { await gateway.loadStories() }
+        startStoryViewerPolling()
 
         Task { [weak self] in
             guard let me = try? await gateway.myUserID() else { return }
@@ -585,11 +621,11 @@ public final class AppModel {
     public static let keepDeletedKey = "privacy.keepDeletedMessages"
     public static let deletedRetentionKey = "privacy.deletedRetentionDays"
 
-    /// Off unless the user turns it on in Settings → Privacy, with the
-    /// explanation shown there. Keeping what senders deleted changes what they
-    /// can expect, so it is never on silently.
+    /// On by default at the user's request (Documentation/DECISIONS.md D15);
+    /// Settings → Nodogram Features turns it off. Self-destructing and
+    /// protected content is never kept either way.
     var keepsDeletedMessages: Bool {
-        UserDefaults.standard.object(forKey: Self.keepDeletedKey) as? Bool ?? false
+        UserDefaults.standard.object(forKey: Self.keepDeletedKey) as? Bool ?? true
     }
 
     /// Opens the archive only when it is switched on: its key lives in the
@@ -648,13 +684,16 @@ public final class AppModel {
     /// app does not invent a placeholder for something it never saw.
     private func handleDeletion(chatID: ChatID, ids: [MessageID]) {
         let removed = Set(ids)
+        if keepsDeletedMessages, archive == nil, let archiveDirectory { openArchive(in: archiveDirectory) }
         guard keepsDeletedMessages, let archive else {
             if chatID == selectedChatID { messages.removeAll { removed.contains($0.id) } }
             return
         }
         Task { [weak self] in
             let archived = await archive.markDeleted(chatID: chatID, messageIDs: ids)
-            guard let self, chatID == self.selectedChatID else { return }
+            guard let self else { return }
+            self.announceDeleted(archived.filter { !$0.isOutgoing && !$0.isService }, in: chatID)
+            guard chatID == self.selectedChatID else { return }
             let byID = Dictionary(uniqueKeysWithValues: archived.map { ($0.id, $0) })
             self.messages = self.messages.compactMap { message in
                 guard removed.contains(message.id) else { return message }
@@ -667,7 +706,7 @@ public final class AppModel {
     }
 
     /// Adds archived deleted messages that fall inside a page of history.
-    private func mergingDeleted(into page: [Message], chatID: ChatID, openEnded: Bool) async -> [Message] {
+    func mergingDeleted(into page: [Message], chatID: ChatID, openEnded: Bool) async -> [Message] {
         guard keepsDeletedMessages, let archive, let first = page.first, let last = page.last else { return page }
         let upper = openEnded ? Int64.max : last.id.rawValue
         let deleted = await archive.deletedMessages(in: chatID, ids: first.id.rawValue...upper)

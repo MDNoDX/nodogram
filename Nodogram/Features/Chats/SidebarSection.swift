@@ -12,6 +12,7 @@ public enum SidebarDestination: String, CaseIterable, Identifiable, Hashable, Se
     case archived, drafts
     case media, files, links, voiceMessages
     case starred, recentlyViewed, localArchive
+    case typingLog, storyViews, myActivity
     case settings
 
     public var id: String { rawValue }
@@ -32,7 +33,10 @@ public enum SidebarDestination: String, CaseIterable, Identifiable, Hashable, Se
         case .voiceMessages: return L10n.voiceMessages
         case .starred: return L10n.starred
         case .recentlyViewed: return L10n.recentlyViewed
-        case .localArchive: return L10n.localArchive
+        case .localArchive: return "Deleted"
+        case .typingLog: return "Typing"
+        case .storyViews: return "Story Views"
+        case .myActivity: return "My Activity"
         case .settings: return L10n.settings
         }
     }
@@ -40,7 +44,7 @@ public enum SidebarDestination: String, CaseIterable, Identifiable, Hashable, Se
     public var icon: String {
         switch self {
         case .allChats: return "bubble.left.and.bubble.right"
-        case .unread: return "circle.badge.fill"
+        case .unread: return "message.badge"
         case .personal: return "person"
         case .groups: return "person.2"
         case .channels: return "megaphone"
@@ -53,7 +57,10 @@ public enum SidebarDestination: String, CaseIterable, Identifiable, Hashable, Se
         case .voiceMessages: return "waveform"
         case .starred: return "star"
         case .recentlyViewed: return "clock"
-        case .localArchive: return "clock.arrow.circlepath"
+        case .localArchive: return "trash.circle"
+        case .typingLog: return "ellipsis.bubble"
+        case .storyViews: return "eye.circle"
+        case .myActivity: return "person.text.rectangle"
         case .settings: return "gearshape"
         }
     }
@@ -78,7 +85,7 @@ public enum SidebarDestination: String, CaseIterable, Identifiable, Hashable, Se
             case .conversations: return [.allChats, .unread, .personal, .groups, .channels, .saved]
             case .organize: return [.archived, .drafts, .starred, .recentlyViewed]
             case .content: return [.media, .files, .links, .voiceMessages]
-            case .local: return [.localArchive, .settings]
+            case .local: return [.localArchive, .typingLog, .storyViews, .myActivity, .settings]
             }
         }
     }

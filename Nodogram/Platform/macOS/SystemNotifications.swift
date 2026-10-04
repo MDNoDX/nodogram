@@ -74,6 +74,7 @@ public final class SystemNotifications: NSObject {
         Task {
             guard await ensureAuthorization() else { return }
             let privacy = UserDefaults.standard.bool(forKey: Self.privacyModeKey)
+                || UserDefaults.standard.bool(forKey: "privacy.streamerMode")
             let content = UNMutableNotificationContent()
             content.title = privacy ? "Nodogram" : payload.title
             content.subtitle = privacy ? "" : payload.subtitle

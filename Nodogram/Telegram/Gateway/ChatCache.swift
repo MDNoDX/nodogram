@@ -33,6 +33,8 @@ final class ChatCache: @unchecked Sendable {
         var mainOrder: Int64 = 0
         var isPinnedInMain = false
         var archiveOrder: Int64 = 0
+        var folderOrders: [Int: Int64] = [:]
+        var folderPinned: Set<Int> = []
         var lastMessage: TDLibKit.Message?
         var unreadCount: Int
         var unreadMentionCount: Int
@@ -226,6 +228,13 @@ final class ChatCache: @unchecked Sendable {
                 ChatID(u.chatId), MessageID(u.messageId),
                 editDate: Date(timeIntervalSince1970: TimeInterval(u.editDate)))]
 
+        case .updateChatFolders(let u):
+            let folders = u.chatFolders.map { info in
+                ChatFolderSummary(id: info.id, title: info.name.text.text,
+                                  iconName: info.icon.name, colorID: info.colorId)
+            }
+            return [.foldersChanged(folders, mainPosition: u.mainChatListPosition)]
+
         default:
             return []
         }
@@ -288,6 +297,53 @@ final class ChatCache: @unchecked Sendable {
         records.values.filter(matches).map { .chatUpdated(domainChat($0)) }
     }
 
+    /// Groups and channels the user is in, from what TDLib already sent.
+    func groupSummaries() -> [GroupSummary] {
+        lock.lock(); defer { lock.unlock() }
+        return records.values.compactMap { record -> GroupSummary? in
+            let info: GroupInfo?
+            switch record.type {
+            case .chatTypeBasicGroup(let t): info = basicGroups[t.basicGroupId]
+            case .chatTypeSupergroup(let t): info = supergroups[t.supergroupId]
+            default: return nil
+            }
+            guard let info else { return nil }
+            let role: GroupSummary.Role
+            var canRemove = false
+            switch info.status {
+            case .chatMemberStatusCreator(let c):
+                guard c.isMember else { return nil }
+                role = .owner; canRemove = true
+            case .chatMemberStatusAdministrator(let a):
+                role = .admin; canRemove = a.rights.canRestrictMembers
+            case .chatMemberStatusMember, .chatMemberStatusRestricted:
+                role = .member
+            default:
+                return nil
+            }
+            return GroupSummary(id: ChatID(record.id), title: record.title, isChannel: info.isChannel,
+                                role: role, memberCount: info.memberCount,
+                                canRemoveMembers: canRemove && !info.isChannel)
+        }
+    }
+
+    /// The basic group or supergroup id behind a chat.
+    func groupIdentity(chatId: Int64) -> (basic: Int64?, supergroup: Int64?) {
+        lock.lock(); defer { lock.unlock() }
+        switch records[chatId]?.type {
+        case .chatTypeBasicGroup(let t): return (t.basicGroupId, nil)
+        case .chatTypeSupergroup(let t): return (nil, t.supergroupId)
+        default: return (nil, nil)
+        }
+    }
+
+    func user(_ id: Int64) -> TDLibKit.User? {
+        lock.lock(); defer { lock.unlock() }
+        return users[id]
+    }
+
+    static func displayName(_ user: TDLibKit.User) -> String { fullName(user) }
+
     func notificationSettings(chatId: Int64) -> ChatNotificationSettings? {
         lock.lock(); defer { lock.unlock() }
         return records[chatId]?.notificationSettings
@@ -309,6 +365,8 @@ final class ChatCache: @unchecked Sendable {
         record.mainOrder = 0
         record.isPinnedInMain = false
         record.archiveOrder = 0
+        record.folderOrders = [:]
+        record.folderPinned = []
         for position in positions { applyPosition(position, to: &record) }
     }
 
@@ -319,8 +377,16 @@ final class ChatCache: @unchecked Sendable {
             record.isPinnedInMain = position.isPinned
         case .chatListArchive:
             record.archiveOrder = position.order.rawValue
-        default:
-            break
+        case .chatListFolder(let folder):
+            // Order 0 removes the chat from the folder.
+            if position.order.rawValue == 0 {
+                record.folderOrders[folder.chatFolderId] = nil
+                record.folderPinned.remove(folder.chatFolderId)
+            } else {
+                record.folderOrders[folder.chatFolderId] = position.order.rawValue
+                if position.isPinned { record.folderPinned.insert(folder.chatFolderId) }
+                else { record.folderPinned.remove(folder.chatFolderId) }
+            }
         }
     }
 
@@ -413,7 +479,9 @@ final class ChatCache: @unchecked Sendable {
             isServiceAccount: isServiceAccount || record.id == Self.serviceAccountId,
             memberCount: memberCount,
             canPost: isServiceAccount ? false : canPost,
-            hasProtectedContent: record.hasProtectedContent
+            hasProtectedContent: record.hasProtectedContent,
+            folderOrders: record.folderOrders,
+            folderPinned: record.folderPinned
         )
     }
 

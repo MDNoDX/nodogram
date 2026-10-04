@@ -285,3 +285,31 @@ it. Nothing reaches `main` untested. New TDLib versions sometimes rename API
 fields; when that breaks the build, the workflow fails visibly instead of
 opening a PR.
 
+
+---
+
+## D15 — Keeping what Telegram shows only briefly
+
+**Date:** 2026-10-04 · **Status:** settled, at the user's explicit request
+
+The user asked, after being told of the API Terms risk (D13), for deleted
+messages to be kept and clearly visible. They are now kept **by default**
+(Settings → Nodogram Features turns it off), shown in place with a red
+"Deleted … · kept on this Mac" banner, listed under **Deleted**, and announced
+by a quiet notification. Every edit is kept too, as a version history opened
+from the "edited" label. The line Nodogram does not cross is ToS 1.4's explicit
+one: self-destructing, auto-deleting, secret-chat and copy-protected messages
+are never recorded.
+
+Also kept locally, all from data Telegram already delivers to this client:
+
+- **Typing log** — who started typing, when, for how long, and whether a
+  message followed ("typed but didn't send"), with optional notifications.
+- **Story viewers** — polled once a minute while the app runs and kept after
+  Telegram's own list expires.
+- **Keyword alerts** — notify on chosen words even in muted chats.
+
+**Not built: "ghost mode."** Hiding online status, read receipts or typing is
+named verbatim in ToS 1.4 as forbidden ("tampering with the 'read' statuses of
+messages (e.g. implementing a 'ghost mode')"). Clients that ship it risk the
+user's api_id and account; Nodogram does not.

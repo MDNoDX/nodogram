@@ -55,6 +55,11 @@ public struct Chat: Identifiable, Hashable, Sendable {
     public var canPost: Bool
     /// "Restrict saving content": no forwarding, saving, copying or screenshots.
     public var hasProtectedContent: Bool
+    /// Position in each Telegram chat folder the chat belongs to, keyed by
+    /// folder id. Absent means "not in that folder".
+    public var folderOrders: [Int: Int64] = [:]
+    /// Folders in which the chat is pinned.
+    public var folderPinned: Set<Int> = []
 
     public init(
         id: ChatID,
@@ -80,7 +85,9 @@ public struct Chat: Identifiable, Hashable, Sendable {
         isServiceAccount: Bool = false,
         memberCount: Int = 0,
         canPost: Bool = true,
-        hasProtectedContent: Bool = false
+        hasProtectedContent: Bool = false,
+        folderOrders: [Int: Int64] = [:],
+        folderPinned: Set<Int> = []
     ) {
         self.id = id
         self.title = title
@@ -106,6 +113,8 @@ public struct Chat: Identifiable, Hashable, Sendable {
         self.memberCount = memberCount
         self.canPost = canPost
         self.hasProtectedContent = hasProtectedContent
+        self.folderOrders = folderOrders
+        self.folderPinned = folderPinned
     }
 
     /// Unread state as the user perceives it: Telegram's count, or the explicit

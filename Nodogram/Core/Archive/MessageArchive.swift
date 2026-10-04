@@ -82,6 +82,17 @@ public actor MessageArchive {
                 CREATE INDEX idx_archive_stored ON archived_message(stored_at);
                 """)
         }
+        migrator.registerMigration("v2_edit_history") { db in
+            try db.execute(sql: """
+                CREATE TABLE message_edit (
+                    chat_id    INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    edited_at  REAL    NOT NULL,
+                    payload    BLOB    NOT NULL
+                );
+                CREATE INDEX idx_edit_message ON message_edit(chat_id, message_id);
+                """)
+        }
         return migrator
     }
 
@@ -109,6 +120,53 @@ public actor MessageArchive {
                     ])
             }
         }
+    }
+
+    // MARK: - Edit history
+
+    /// Records a new version of a message's text. The original stays in
+    /// `archived_message`; each edit is kept here, sealed the same way. Only
+    /// messages that were recorded are tracked, and repeats are ignored.
+    public func recordEdit(chatID: ChatID, messageID: MessageID, text: String, at date: Date = Date()) {
+        let versions = editHistory(chatID: chatID, messageID: messageID)
+        guard !versions.isEmpty, versions.last?.text != text,
+              let plain = text.data(using: .utf8),
+              let sealed = try? AES.GCM.seal(plain, using: key).combined else { return }
+        try? database.write { db in
+            try db.execute(sql: """
+                INSERT INTO message_edit (chat_id, message_id, edited_at, payload) VALUES (?, ?, ?, ?)
+                """, arguments: [chatID.rawValue, messageID.rawValue, date.timeIntervalSince1970, sealed])
+        }
+    }
+
+    public struct Version: Sendable, Hashable {
+        public let date: Date
+        public let text: String
+    }
+
+    /// Every known version of a message, original first. Empty when the
+    /// message was never recorded.
+    public func editHistory(chatID: ChatID, messageID: MessageID) -> [Version] {
+        let result = try? database.read { db -> [Version] in
+            guard let row = try Row.fetchOne(db, sql: """
+                SELECT * FROM archived_message WHERE chat_id = ? AND message_id = ?
+                """, arguments: [chatID.rawValue, messageID.rawValue]),
+                  let original = open(row) else { return [] }
+            var versions = [Version(date: original.date, text: original.text)]
+            let edits = try Row.fetchAll(db, sql: """
+                SELECT edited_at, payload FROM message_edit WHERE chat_id = ? AND message_id = ?
+                ORDER BY edited_at
+                """, arguments: [chatID.rawValue, messageID.rawValue])
+            for edit in edits {
+                guard let sealed: Data = edit["payload"],
+                      let box = try? AES.GCM.SealedBox(combined: sealed),
+                      let plain = try? AES.GCM.open(box, using: key),
+                      let text = String(data: plain, encoding: .utf8) else { continue }
+                versions.append(Version(date: Date(timeIntervalSince1970: edit["edited_at"]), text: text))
+            }
+            return versions
+        }
+        return result ?? []
     }
 
     /// Marks messages deleted and returns the archived copies, ready to show
@@ -171,6 +229,11 @@ public actor MessageArchive {
         try? database.write { db in
             try db.execute(sql: "DELETE FROM archived_message WHERE deleted_at IS NULL AND stored_at < ?",
                            arguments: [now - keepReceived])
+            try db.execute(sql: """
+                DELETE FROM message_edit WHERE NOT EXISTS (
+                    SELECT 1 FROM archived_message a
+                    WHERE a.chat_id = message_edit.chat_id AND a.message_id = message_edit.message_id)
+                """)
             if let keepDeleted {
                 try db.execute(sql: "DELETE FROM archived_message WHERE deleted_at IS NOT NULL AND deleted_at < ?",
                                arguments: [now - keepDeleted])
@@ -195,7 +258,10 @@ public actor MessageArchive {
     /// Erases everything, then compacts the file so freed pages do not keep
     /// old ciphertext around.
     public func eraseAll() {
-        try? database.write { db in try db.execute(sql: "DELETE FROM archived_message") }
+        try? database.write { db in
+            try db.execute(sql: "DELETE FROM archived_message")
+            try db.execute(sql: "DELETE FROM message_edit")
+        }
         try? database.vacuum()
     }
 

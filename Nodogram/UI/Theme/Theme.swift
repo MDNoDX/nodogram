@@ -10,11 +10,49 @@
 import SwiftUI
 
 public enum Theme {
-    /// Nodogram's own accent.
-    public static let accent = Color(red: 0.36, green: 0.40, blue: 0.78)
+    /// Accent choices offered in Settings → Appearance. The first is
+    /// Nodogram's own slate-indigo.
+    public static let accentChoices: [(name: String, color: Color)] = [
+        ("Indigo", Color(red: 0.36, green: 0.40, blue: 0.78)),
+        ("Blue", Color(red: 0.20, green: 0.52, blue: 0.96)),
+        ("Teal", Color(red: 0.12, green: 0.62, blue: 0.66)),
+        ("Green", Color(red: 0.22, green: 0.66, blue: 0.36)),
+        ("Orange", Color(red: 0.95, green: 0.55, blue: 0.16)),
+        ("Red", Color(red: 0.90, green: 0.30, blue: 0.30)),
+        ("Pink", Color(red: 0.90, green: 0.36, blue: 0.62)),
+        ("Purple", Color(red: 0.58, green: 0.36, blue: 0.90)),
+    ]
+
+    public static let accentKey = "appearance.accent"
+    public static let textSizeKey = "appearance.textSize"
+    public static let wallpaperKey = "appearance.wallpaper"
+    public static let colorSchemeKey = "appearance.colorScheme"   // "system" | "light" | "dark"
+
+    /// The accent the user chose. Read on every access, so a change applies
+    /// as soon as views redraw.
+    public static var accent: Color {
+        let index = UserDefaults.standard.integer(forKey: accentKey)
+        return accentChoices[accentChoices.indices.contains(index) ? index : 0].color
+    }
 
     /// A muted companion used for secondary emphasis.
-    public static let accentSoft = Color(red: 0.36, green: 0.40, blue: 0.78).opacity(0.14)
+    public static var accentSoft: Color { accent.opacity(0.14) }
+
+    /// Message text size, 12–18 pt.
+    public static var messageSize: CGFloat {
+        let value = UserDefaults.standard.double(forKey: textSizeKey)
+        return value >= 11 && value <= 20 ? value : 13.5
+    }
+
+    /// Chat background presets: none, then soft gradients.
+    public static let wallpapers: [(name: String, colors: [Color])] = [
+        ("None", []),
+        ("Dusk", [Color(red: 0.36, green: 0.40, blue: 0.78).opacity(0.10), Color(red: 0.62, green: 0.36, blue: 0.80).opacity(0.10)]),
+        ("Sea", [Color(red: 0.16, green: 0.58, blue: 0.80).opacity(0.10), Color(red: 0.20, green: 0.75, blue: 0.62).opacity(0.10)]),
+        ("Meadow", [Color(red: 0.42, green: 0.72, blue: 0.36).opacity(0.10), Color(red: 0.90, green: 0.80, blue: 0.36).opacity(0.10)]),
+        ("Sunset", [Color(red: 0.95, green: 0.55, blue: 0.30).opacity(0.10), Color(red: 0.90, green: 0.36, blue: 0.55).opacity(0.10)]),
+        ("Graphite", [Color.gray.opacity(0.10), Color.gray.opacity(0.02)]),
+    ]
 
     // Semantic colours, mapped to AppKit's dynamic system colours so light and
     // dark mode, increased contrast, and reduced transparency all work without
@@ -41,7 +79,7 @@ public enum Theme {
     /// Bubble fills. Incoming uses a neutral system fill so it adapts to light,
     /// dark and increased-contrast modes; outgoing carries the brand accent.
     public static let bubbleIncoming = Color(nsColor: .unemphasizedSelectedContentBackgroundColor).opacity(0.55)
-    public static let bubbleOutgoing = accent.opacity(0.17)
+    public static var bubbleOutgoing: Color { accent.opacity(0.17) }
 
     private static let avatarPalette: [(Color, Color)] = [
         (Color(red: 0.42, green: 0.47, blue: 0.86), Color(red: 0.32, green: 0.36, blue: 0.74)),

@@ -1,6 +1,7 @@
 //  Conversation pane.
 
 import SwiftUI
+import NodogramCore
 import NodogramDomain
 import NodogramUI
 import NodogramPlatform
@@ -267,6 +268,7 @@ private struct MessageTimeline: View {
                 .padding(.top, 6)
             }
             .defaultScrollAnchor(.bottom)
+            .background { ChatWallpaper() }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentOffset.y < 280
             } action: { wasNearTop, nearTop in
@@ -358,6 +360,63 @@ private struct MessageTimeline: View {
                 }
             }
             .animation(.easeOut(duration: 0.2), value: model.toast)
+        }
+    }
+}
+
+/// Every version of an edited message that this Mac saw, original first.
+struct EditHistoryView: View {
+    let model: AppModel
+    let message: Message
+
+    @State private var versions: [MessageArchive.Version]?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Edit history", systemImage: "clock.arrow.circlepath").font(.headline)
+            if let versions {
+                if versions.count < 2 {
+                    Text(model.keepsDeletedMessages
+                         ? "No earlier version was seen on this Mac — it was edited before Nodogram received it."
+                         : "Turn on “Keep messages others delete” in Settings → Nodogram Features to keep edit history.")
+                        .font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 300, alignment: .leading)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(Array(versions.enumerated()), id: \.offset) { index, version in
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(index == 0 ? "Original · \(RelativeTimeFormatter.exact(version.date))"
+                                                    : "Edit \(index) · \(RelativeTimeFormatter.exact(version.date))")
+                                        .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.secondary)
+                                    Text(version.text.isEmpty ? "(no text)" : version.text)
+                                        .font(.system(size: 12.5)).textSelection(.enabled)
+                                        .strikethrough(index < versions.count - 1, color: .secondary.opacity(0.4))
+                                }
+                            }
+                        }
+                    }
+                    .frame(width: 320)
+                    .frame(maxHeight: 360)
+                }
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .padding(14)
+        .task { versions = await model.editHistory(of: message) }
+    }
+}
+
+/// The chat background chosen in Settings → Appearance.
+struct ChatWallpaper: View {
+    @AppStorage(Theme.wallpaperKey) private var index = 0
+
+    var body: some View {
+        let colors = Theme.wallpapers[Theme.wallpapers.indices.contains(index) ? index : 0].colors
+        if colors.isEmpty {
+            Color.clear
+        } else {
+            LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
         }
     }
 }
@@ -462,7 +521,9 @@ struct DaySeparator: View {
             .accessibilityAddTraits(.isHeader)
     }
 
-    private var label: String {
+    private var label: String { Self.label(for: date) }
+
+    static func label(for date: Date) -> String {
         let calendar = Calendar.current
         if calendar.isDateInToday(date) { return "Today" }
         if calendar.isDateInYesterday(date) { return "Yesterday" }
@@ -591,6 +652,7 @@ struct MessageBubble: View {
     @State private var showsTranslation = false
     @State private var deleteOptions: TelegramGateway.MessagePermissions?
     @State private var confirmingDelete = false
+    @State private var showsEditHistory = false
 
     /// Media that looks best edge-to-edge, without bubble padding around it.
     /// Posts with reactions, comments or a quote keep their bubble so those
@@ -679,6 +741,14 @@ struct MessageBubble: View {
 
     private var bubble: some View {
         BubbleLayout(maxWidth: 480) {
+            if message.isDeleted, let deletedAt = message.deletedAt {
+                Label("Deleted \(RelativeTimeFormatter.short(deletedAt)) · kept on this Mac", systemImage: "trash.fill")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Theme.failure)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Theme.failure.opacity(0.12), in: Capsule())
+                    .help("The sender deleted this \(RelativeTimeFormatter.exact(deletedAt)). It is gone from Telegram; this copy exists only here.")
+            }
             if showsSenderName, !message.senderName.isEmpty {
                 Text(message.senderName)
                     .font(.system(size: 12.5, weight: .semibold))
@@ -716,8 +786,8 @@ struct MessageBubble: View {
             }
 
             if !message.text.isEmpty, message.poll == nil || message.isDeleted {
-                Text(FormattedText.attributed(message.text, entities: message.entities, baseSize: 13.5))
-                    .font(.system(size: 13.5))
+                Text(FormattedText.attributed(message.text, entities: message.entities, baseSize: Theme.messageSize))
+                    .font(.system(size: Theme.messageSize))
                     .foregroundStyle(message.isDeleted ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -798,8 +868,14 @@ struct MessageBubble: View {
                         This copy exists only on this Mac — it is gone from Telegram.
                         """)
             } else if message.wasEdited {
-                Text(L10n.edited.lowercased())
-                    .help(message.editDate.map { "Edited \(RelativeTimeFormatter.exact($0))" } ?? "")
+                Button { showsEditHistory = true } label: {
+                    Text(L10n.edited.lowercased()).underline(false)
+                }
+                .buttonStyle(.plain)
+                .help("Show earlier versions")
+                .popover(isPresented: $showsEditHistory, arrowEdge: .bottom) {
+                    EditHistoryView(model: model, message: message)
+                }
             }
             if message.isChannelPost, !message.authorSignature.isEmpty {
                 Text(message.authorSignature).lineLimit(1)

@@ -108,4 +108,41 @@ struct MessageArchiveTests {
         await archive.eraseAll()
         #expect(await archive.statistics() == .init(received: 0, deleted: 0))
     }
+
+    @Test("Edits are kept as versions, original first")
+    func editHistory() async throws {
+        let (archive, _) = try makeArchive()
+        await archive.record([message(20, "See you at 5")])
+        await archive.recordEdit(chatID: ChatID(1), messageID: MessageID(20), text: "See you at 6")
+        await archive.recordEdit(chatID: ChatID(1), messageID: MessageID(20), text: "See you at 6")   // repeat ignored
+        await archive.recordEdit(chatID: ChatID(1), messageID: MessageID(20), text: "Cancelled")
+        let versions = await archive.editHistory(chatID: ChatID(1), messageID: MessageID(20))
+        #expect(versions.map(\.text) == ["See you at 5", "See you at 6", "Cancelled"])
+    }
+
+    @Test("Edits of a message never received are not tracked")
+    func editWithoutOriginal() async throws {
+        let (archive, _) = try makeArchive()
+        await archive.recordEdit(chatID: ChatID(1), messageID: MessageID(99), text: "new")
+        #expect(await archive.editHistory(chatID: ChatID(1), messageID: MessageID(99)).isEmpty)
+    }
+
+    @Test("Recently deleted lists newest deletions across chats")
+    func recentlyDeleted() async throws {
+        let (archive, _) = try makeArchive()
+        await archive.record([message(1, "one", chat: 1), message(2, "two", chat: 2), message(3, "three", chat: 2)])
+        _ = await archive.markDeleted(chatID: ChatID(1), messageIDs: [MessageID(1)], at: Date(timeIntervalSince1970: 100))
+        _ = await archive.markDeleted(chatID: ChatID(2), messageIDs: [MessageID(3)], at: Date(timeIntervalSince1970: 200))
+        let recent = await archive.recentlyDeleted()
+        #expect(recent.map(\.text) == ["three", "one"])
+    }
+
+    @Test("Erasing removes edit history too")
+    func eraseRemovesEdits() async throws {
+        let (archive, _) = try makeArchive()
+        await archive.record([message(30, "a")])
+        await archive.recordEdit(chatID: ChatID(1), messageID: MessageID(30), text: "b")
+        await archive.eraseAll()
+        #expect(await archive.editHistory(chatID: ChatID(1), messageID: MessageID(30)).isEmpty)
+    }
 }

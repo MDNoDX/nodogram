@@ -10,9 +10,11 @@ import NodogramUI
 
 public struct MainWindowView: View {
     @State private var model = AppModel()
+    @AppStorage(Theme.colorSchemeKey) private var colorScheme = "system"
+    @AppStorage(Theme.accentKey) private var accentIndex = 0
+    @AppStorage(Theme.textSizeKey) private var textSize = 13.5
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var confirmingSignOut = false
-    @Environment(\.openSettings) private var openSettings
 
     public init() {}
 
@@ -57,8 +59,12 @@ public struct MainWindowView: View {
                     .animation(.easeOut(duration: 0.15), value: model.storyViewer)
                     .animation(.easeOut(duration: 0.12), value: model.isPaletteVisible)
                     .focusedSceneValue(\.appModel, model)
+                    // Appearance changes redraw everything with the new tokens.
+                    .id("appearance-\(accentIndex)-\(textSize)")
             }
         }
+        .tint(Theme.accent)
+        .preferredColorScheme(colorScheme == "light" ? .light : colorScheme == "dark" ? .dark : nil)
         .task {
             if case .loadingCredentials = model.phase {
                 await model.start()
@@ -98,29 +104,30 @@ public struct MainWindowView: View {
 
     private var mainLayout: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(
-                selection: Binding(
-                    get: { model.selectedDestination },
-                    set: { destination in
-                        // Settings is its own window, not a section.
-                        if destination == .settings { openSettings() } else { model.selectedDestination = destination }
-                    }
-                ),
-                connectionState: model.connectionState,
-                unreadTotal: model.unreadTotal,
-                unreadChats: model.chatsByID.values.filter { $0.appearsUnread && !$0.isMuted }.count,
-                draftCount: model.draftCount,
-                starredCount: model.starred.count,
-                onSignOut: { confirmingSignOut = true }
-            )
-            .navigationSplitViewColumnWidth(78)
+            SidebarView(model: model, onSignOut: { confirmingSignOut = true })
+                .navigationSplitViewColumnWidth(78)
         } content: {
-            ChatListView(model: model)
-                .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 460)
+            Group {
+                if model.selectedDestination == .settings {
+                    SettingsListView(model: model)
+                } else {
+                    ChatListView(model: model)
+                }
+            }
+            .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 460)
         } detail: {
-            ConversationView(model: model)
-                .frame(minWidth: Theme.Metrics.conversationMinWidth)
+            Group {
+                if model.selectedDestination == .settings {
+                    SettingsDetailView(model: model)
+                } else {
+                    ConversationView(model: model)
+                }
+            }
+            .frame(minWidth: Theme.Metrics.conversationMinWidth)
         }
         .navigationSplitViewStyle(.balanced)
+        // Content-sized minimum: the window cannot be made smaller than what
+        // fits, so nothing — the composer above all — is ever cut off.
+        .frame(minWidth: 960, minHeight: 600)
     }
 }

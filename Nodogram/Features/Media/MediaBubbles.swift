@@ -70,7 +70,9 @@ struct PhotoBubble: View {
         .task(id: photo.preview.id) {
             // Photos download as soon as they scroll into view, like Telegram's
             // default; they are small and expected to just be there.
-            if !state.file.isComplete { _ = await model.fetch(photo.preview, priority: 4) }
+            if !state.file.isComplete, UserDefaults.standard.object(forKey: "media.autoDownloadPhotos") as? Bool ?? true {
+                _ = await model.fetch(photo.preview, priority: 4)
+            }
         }
         .accessibilityLabel("Photo")
         .accessibilityAddTraits(.isButton)
@@ -89,6 +91,7 @@ struct VideoBubble: View {
 
     /// A full-resolution frame, once one is available.
     @State private var posterPath: String?
+    @AppStorage("media.autoplayGIFs") private var autoplayGIFs = true
 
     var body: some View {
         let state = model.files.state(for: video.file)
@@ -103,10 +106,10 @@ struct VideoBubble: View {
                 LocalImageView(path: sharp, maxPixel: 1400) { Color.clear }
             }
 
-            if isAnimation, let path = state.file.localPath {
+            if isAnimation, autoplayGIFs, let path = state.file.localPath {
                 // GIFs play inline, silently and on loop, once downloaded.
                 LoopingVideoView(path: path)
-            } else if !isAnimation {
+            } else if !isAnimation || !autoplayGIFs {
                 Image(systemName: "play.fill")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(.white)
@@ -140,7 +143,7 @@ struct VideoBubble: View {
             posterPath = VideoPosters.shared.cached(video.file.uniqueID)
             if let thumbnail = video.thumbnail { _ = await model.fetch(thumbnail, priority: 4) }
             // Small GIFs auto-download; full videos stream on demand instead.
-            if isAnimation, !state.file.isComplete, video.file.size < 8 * 1024 * 1024 {
+            if isAnimation, autoplayGIFs, !state.file.isComplete, video.file.size < 8 * 1024 * 1024 {
                 model.download(video.file, priority: 2)
             }
             if let cover = video.cover {

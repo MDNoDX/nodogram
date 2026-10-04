@@ -265,7 +265,9 @@ extension AppModel {
                 if wasPending { self.reloadLatest() }
                 return
             }
-            self.messages = around
+            // Deleted messages kept on this Mac belong in place, so a jump to
+            // one from the Deleted section lands on it.
+            self.messages = await self.mergingDeleted(into: around, chatID: chatID, openEnded: false)
             self.hasMoreHistory = true
             self.hasNewerHistory = true
             self.highlight(messageID)

@@ -29,7 +29,8 @@ public enum LinkPolicy {
     /// Opens a link from a message, asking first for unusual schemes.
     @MainActor
     public static func open(_ url: URL) {
-        if opensDirectly(url) {
+        let asks = UserDefaults.standard.object(forKey: "links.askBeforeOpening") as? Bool ?? true
+        if opensDirectly(url) || !asks {
             NSWorkspace.shared.open(url)
             return
         }

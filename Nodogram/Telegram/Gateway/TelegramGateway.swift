@@ -66,12 +66,24 @@ public enum TelegramEvent: Sendable {
     case notificationsAdded([ChatNotification])
     /// These notifications were read or otherwise withdrawn; remove them.
     case notificationsRemoved(groupID: Int, ids: [Int])
+    /// The user's chat folders, in order. `mainPosition` is where "All Chats"
+    /// sits among them.
+    case foldersChanged([ChatFolderSummary], mainPosition: Int)
 }
 
 /// Which of Telegram's chat lists to load.
-public enum ChatListKind: Sendable {
+public enum ChatListKind: Hashable, Sendable {
     case main
     case archive
+    case folder(Int)
+
+    var tdList: ChatList {
+        switch self {
+        case .main: return .chatListMain
+        case .archive: return .chatListArchive
+        case .folder(let id): return .chatListFolder(ChatListFolder(chatFolderId: id))
+        }
+    }
 }
 
 public final class TelegramGateway: @unchecked Sendable {
@@ -101,10 +113,10 @@ public final class TelegramGateway: @unchecked Sendable {
     }()
 
     /// This gateway's own client. One per account.
-    private let client: TDLibClient
+    let client: TDLibClient
 
     /// Client-side mirror of TDLib's chat state, maintained from updates.
-    private let cache: ChatCache
+    let cache: ChatCache
 
     /// The single ordered event stream, delivered in batches.
     ///
@@ -224,7 +236,7 @@ public final class TelegramGateway: @unchecked Sendable {
     public func loadChats(_ list: ChatListKind, limit: Int) async throws(DomainError) -> Bool {
         do {
             _ = try await client.loadChats(
-                chatList: list == .main ? .chatListMain : .chatListArchive,
+                chatList: list.tdList,
                 limit: limit
             )
             return true
@@ -900,7 +912,7 @@ public final class TelegramGateway: @unchecked Sendable {
 
     /// Runs a TDLib request, translating any failure into a `DomainError` so no
     /// TDLib error type escapes this layer.
-    private func run<T>(_ body: () async throws -> T) async throws(DomainError) -> T {
+    func run<T>(_ body: () async throws -> T) async throws(DomainError) -> T {
         do {
             return try await body()
         } catch {

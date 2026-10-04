@@ -19,11 +19,10 @@ struct NodogramMain: App {
         }
         // Content-sized minimums; the window frame itself is restored by macOS.
         .defaultSize(width: 1180, height: 760)
+        .windowResizability(.contentMinSize)
         .commands { NodogramCommands() }
 
-        Settings {
-            SettingsView()
-        }
+
     }
 }
 

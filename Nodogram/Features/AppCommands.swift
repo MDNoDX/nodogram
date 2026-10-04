@@ -23,6 +23,12 @@ public struct NodogramCommands: Commands {
     public init() {}
 
     public var body: some Commands {
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings…") { model?.selectedDestination = .settings }
+                .keyboardShortcut(",", modifiers: .command)
+                .disabled(model == nil)
+        }
+
         CommandGroup(replacing: .newItem) {
             Button("Quick Open…") { model?.isPaletteVisible = true }
                 .keyboardShortcut("k", modifiers: .command)
@@ -62,6 +68,15 @@ public struct NodogramCommands: Commands {
             Button("Jump to Latest") { model?.returnToLatest() }
                 .keyboardShortcut(.downArrow, modifiers: .command)
                 .disabled(model?.hasNewerHistory != true)
+        }
+
+        CommandGroup(after: .toolbar) {
+            Button("Toggle Streamer Mode") {
+                let key = "privacy.streamerMode"
+                UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: key), forKey: key)
+                model?.showToast(UserDefaults.standard.bool(forKey: key) ? "Streamer mode on" : "Streamer mode off")
+            }
+            .keyboardShortcut("h", modifiers: [.command, .shift])
         }
 
         CommandMenu("Go") {

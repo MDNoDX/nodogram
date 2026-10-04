@@ -27,12 +27,13 @@ struct MediaViewerOverlay: View {
            let message = model.messages.first(where: { $0.id == id }),
            let media = message.media {
             ZStack {
-                Color.black.opacity(0.94)
+                // Opaque: nothing of the chat shows through behind the photo.
+                Color.black
                     .ignoresSafeArea()
 
                 content(message: message, media: media)
                     .padding(.top, 54)
-                    .padding(.bottom, isVideo(media) ? 70 : 54)
+                    .padding(.bottom, isVideo(media) ? 70 : (model.viewableMedia.count > 1 ? 96 : 54))
                     .padding(.horizontal, 64)
 
                 chrome(message: message, media: media)
@@ -106,6 +107,14 @@ struct MediaViewerOverlay: View {
                         .foregroundStyle(.white.opacity(0.55))
                         .help("This chat doesn't allow saving its media.")
                 }
+                ViewerButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Full Screen (F)") {
+                    NSApp.keyWindow?.toggleFullScreen(nil)
+                }
+                ViewerButton(symbol: "bubble.left", help: "Show in Chat") {
+                    let id = message.id
+                    close()
+                    model.jump(to: id)
+                }
                 ViewerButton(symbol: "xmark", help: "Close (esc)") { close() }
             }
             .foregroundStyle(.white)
@@ -123,6 +132,27 @@ struct MediaViewerOverlay: View {
         .overlay(alignment: .trailing) {
             if let index, index + 1 < items.count {
                 NavArrow(symbol: "chevron.right") { go(to: items[index + 1]) }
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if !isVideo(media) {
+                VStack(spacing: 8) {
+                    if !message.text.isEmpty {
+                        Text(message.text)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white)
+                            .lineLimit(3)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 14).padding(.vertical, 7)
+                            .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
+                            .frame(maxWidth: 640)
+                            .textSelection(.enabled)
+                    }
+                    if items.count > 1 {
+                        Filmstrip(items: items, currentID: message.id, model: model) { go(to: $0) }
+                    }
+                }
+                .padding(.bottom, 10)
             }
         }
         .overlay(alignment: .bottom) {
@@ -194,6 +224,8 @@ struct MediaViewerOverlay: View {
         case 123: video.skip(-10); return true
         case 124: video.skip(10); return true
         case 49 where isVideo: video.togglePlay(); return true               // space
+        case 3 where flags.intersection([.command, .option, .control]).isEmpty:  // F
+            NSApp.keyWindow?.toggleFullScreen(nil); return true
         default: break
         }
 
@@ -225,6 +257,57 @@ private struct KeyPress: Sendable {
     let keyCode: UInt16
     let flags: NSEvent.ModifierFlags
     let key: String
+}
+
+/// Thumbnails of every photo and video in the chat, for jumping between them.
+private struct Filmstrip: View {
+    let items: [Message]
+    let currentID: MessageID
+    let model: AppModel
+    let onSelect: (Message) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(items, id: \.id) { item in
+                        thumb(item)
+                            .frame(width: item.id == currentID ? 54 : 40, height: 54)
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(.white, lineWidth: item.id == currentID ? 2 : 0))
+                            .opacity(item.id == currentID ? 1 : 0.6)
+                            .id(item.id)
+                            .onTapGesture { onSelect(item) }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .animation(.easeOut(duration: 0.15), value: currentID)
+            }
+            .frame(maxWidth: 720)
+            .frame(height: 58)
+            .onAppear { proxy.scrollTo(currentID, anchor: .center) }
+            .onChange(of: currentID) { _, id in withAnimation { proxy.scrollTo(id, anchor: .center) } }
+        }
+    }
+
+    @ViewBuilder
+    private func thumb(_ item: Message) -> some View {
+        switch item.media {
+        case .photo(let photo):
+            ZStack {
+                MinithumbnailView(data: photo.minithumbnail)
+                LocalImageView(path: model.files.state(for: photo.preview).file.localPath, maxPixel: 160) { Color.clear }
+            }
+        case .video(let video), .animation(let video):
+            ZStack {
+                MinithumbnailView(data: video.minithumbnail)
+                LocalImageView(path: video.thumbnail.flatMap { model.files.state(for: $0).file.localPath }, maxPixel: 160) { Color.clear }
+                Image(systemName: "play.fill").font(.system(size: 10)).foregroundStyle(.white)
+            }
+        default:
+            Color.gray.opacity(0.3)
+        }
+    }
 }
 
 private struct ViewerButton: View {
@@ -278,7 +361,8 @@ final class PhotoZoomCommands {
     }
 
     func reset() {
-        scrollView?.animator().magnification = 1
+        scrollView?.magnification = 1
+        scrollView?.needsLayout = true
     }
 
     func rotate() { onRotate?() }
@@ -361,13 +445,51 @@ private struct ZoomableImageView: NSViewRepresentable {
             let point = recognizer.location(in: scrollView.documentView)
             let target: CGFloat = scrollView.magnification > 1.01 ? 1 : 2.5
             scrollView.animator().setMagnification(target, centeredAt: point)
+            if target == 1 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { (scrollView as? FitScrollView)?.fit() }
+            }
         }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    /// Keeps the image fitted to the visible area whenever it is not zoomed,
+    /// on every layout — window resizes and full screen included — so a
+    /// photo is never larger than the screen and never cropped.
+    final class FitScrollView: NSScrollView {
+        override func layout() {
+            super.layout()
+            fit()
+        }
+
+        func fit() {
+            guard magnification <= 1.001, let document = documentView else { return }
+            let size = contentView.bounds.size
+            if document.frame.size != size { document.frame = NSRect(origin: .zero, size: size) }
+        }
+
+        /// A mouse wheel zooms, like Telegram's viewer; a trackpad scrolls
+        /// (pinch zooms).
+        override func scrollWheel(with event: NSEvent) {
+            guard !event.hasPreciseScrollingDeltas, event.scrollingDeltaY != 0 else {
+                super.scrollWheel(with: event)
+                return
+            }
+            let factor: CGFloat = event.scrollingDeltaY > 0 ? 1.15 : 1 / 1.15
+            let target = min(maxMagnification, max(minMagnification, magnification * factor))
+            let point = documentView?.convert(event.locationInWindow, from: nil) ?? .zero
+            setMagnification(target, centeredAt: point)
+            if target <= 1.001 { fit() }
+        }
+
+        override func endGesture(with event: NSEvent) {
+            super.endGesture(with: event)
+            if magnification <= 1.001 { fit() }
+        }
+    }
+
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = FitScrollView()
         scrollView.contentView = CenteringClipView()
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = false
@@ -380,7 +502,6 @@ private struct ZoomableImageView: NSViewRepresentable {
         let imageView = NSImageView()
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.image = image
-        imageView.autoresizingMask = [.width, .height]
         scrollView.documentView = imageView
 
         let doubleClick = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleClick(_:)))
@@ -395,9 +516,7 @@ private struct ZoomableImageView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let imageView = scrollView.documentView as? NSImageView else { return }
         if imageView.image !== image { imageView.image = image }
-        if scrollView.magnification <= 1.001 {
-            imageView.frame = NSRect(origin: .zero, size: scrollView.contentSize)
-        }
+        (scrollView as? FitScrollView)?.fit()
         commands.scrollView = scrollView
     }
 }

@@ -17,6 +17,7 @@ public struct ComposerView: View {
     private let onSend: () -> Void
 
     @FocusState private var isFocused: Bool
+    @AppStorage("composer.sendWithEnter") private var sendWithEnter = true
 
     public init(
         chatID: ChatID,
@@ -93,6 +94,13 @@ public struct ComposerView: View {
                         .focused($isFocused)
                         .frame(minHeight: 20, maxHeight: 140)
                         .fixedSize(horizontal: false, vertical: true)
+                        // Telegram's default: ↩ sends, ⇧↩ starts a new line.
+                        .onKeyPress(.return, phases: .down) { press in
+                            guard sendWithEnter, !press.modifiers.contains(.shift),
+                                  !press.modifiers.contains(.option) else { return .ignored }
+                            if canSend { onSend() }
+                            return .handled
+                        }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -124,7 +132,7 @@ public struct ComposerView: View {
                 Text(draftIndicatorVisible ? L10n.draftSaved : " ")
                     .animation(.easeInOut(duration: 0.2), value: draftIndicatorVisible)
                 Spacer()
-                Text("⌘↩ to send")
+                Text(sendWithEnter ? "↩ to send · ⇧↩ new line" : "⌘↩ to send")
                     .opacity(canSend ? 1 : 0)
             }
             .font(.system(size: 10.5))
