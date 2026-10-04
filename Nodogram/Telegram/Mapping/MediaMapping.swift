@@ -32,7 +32,8 @@ enum MediaMapping {
                 minithumbnail: video.minithumbnail?.data,
                 width: video.width, height: video.height, duration: video.duration,
                 mimeType: video.mimeType, fileName: video.fileName,
-                supportsStreaming: video.supportsStreaming))
+                supportsStreaming: video.supportsStreaming,
+                cover: v.cover.flatMap(photo).map(\.preview)))
 
         case .messageAnimation(let v):
             let anim = v.animation

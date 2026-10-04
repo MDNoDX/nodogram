@@ -54,6 +54,11 @@ public enum TelegramEvent: Sendable {
     case fileUpdated(MediaFile)
     /// Someone started or stopped typing, recording, etc. `nil` = stopped.
     case chatActivity(ChatID, user: UserID, activity: ChatActivity?)
+    /// Views, forwards, reactions or comment count changed.
+    case messageInteraction(ChatID, MessageID, views: Int, forwards: Int,
+                            reactions: [ReactionSummary], comments: Int?)
+    /// A chat's active stories changed; empty ids mean it has none now.
+    case storiesChanged(StoryOwner)
 }
 
 /// Which of Telegram's chat lists to load.
@@ -302,7 +307,8 @@ public final class TelegramGateway: @unchecked Sendable {
         }
     }
 
-    public func sendText(_ text: String, to chat: ChatID) async throws(DomainError) {
+    public func sendText(_ text: String, to chat: ChatID, replyTo: MessageID? = nil,
+                         thread: Int64? = nil) async throws(DomainError) {
         try await run {
             // The pending message arrives through `updateNewMessage`, and its
             // confirmation through `updateMessageSendSucceeded`; the return value
@@ -316,8 +322,11 @@ public final class TelegramGateway: @unchecked Sendable {
                 )),
                 options: nil,
                 replyMarkup: nil,
-                replyTo: nil,
-                topicId: nil
+                replyTo: replyTo.map {
+                    .inputMessageReplyToMessage(InputMessageReplyToMessage(
+                        checklistTaskId: 0, messageId: $0.rawValue, pollOptionId: "", quote: nil))
+                },
+                topicId: thread.map { .messageTopicThread(MessageTopicThread(messageThreadId: $0)) }
             )
         }
     }
@@ -358,6 +367,279 @@ public final class TelegramGateway: @unchecked Sendable {
         case .messageReadDateMyPrivacyRestricted:
             return .ownPrivacyRestricted
         }
+    }
+
+    // MARK: - History around a message
+
+    /// Messages surrounding `message`, for jumping to a search result or a
+    /// replied-to message that is not loaded.
+    public func history(around message: MessageID, in chat: ChatID, limit: Int = 40) async throws(DomainError)
+        -> [NodogramDomain.Message] {
+        try await run {
+            let batch = try await self.client.getChatHistory(
+                chatId: chat.rawValue, fromMessageId: message.rawValue,
+                limit: limit, offset: -(limit / 2), onlyLocal: false)
+            return (batch.messages ?? []).map(self.cache.mapMessage).sorted { $0.id.rawValue < $1.id.rawValue }
+        }
+    }
+
+    /// Messages newer than `after`, oldest first — used when the user scrolls
+    /// down after jumping into older history.
+    public func history(after: MessageID, in chat: ChatID, limit: Int = 50) async throws(DomainError)
+        -> [NodogramDomain.Message] {
+        try await run {
+            let batch = try await self.client.getChatHistory(
+                chatId: chat.rawValue, fromMessageId: after.rawValue,
+                limit: limit, offset: -(limit - 1), onlyLocal: false)
+            return (batch.messages ?? [])
+                .filter { $0.id > after.rawValue }
+                .map(self.cache.mapMessage)
+                .sorted { $0.id.rawValue < $1.id.rawValue }
+        }
+    }
+
+    public func repliedMessage(to message: MessageID, in chat: ChatID) async -> NodogramDomain.Message? {
+        guard let replied = try? await client.getRepliedMessage(chatId: chat.rawValue, messageId: message.rawValue)
+        else { return nil }
+        return cache.mapMessage(replied)
+    }
+
+    /// Makes sure a chat is known locally, e.g. one that appears only in
+    /// search results. It arrives as a `chatUpdated` event.
+    public func ensureChat(_ chat: ChatID) async {
+        _ = try? await client.getChat(chatId: chat.rawValue)
+    }
+
+    public func chatTitle(_ chat: ChatID) -> String? {
+        cache.title(of: chat.rawValue)
+    }
+
+    // MARK: - Reactions
+
+    public func setReaction(_ kind: ReactionSummary.Kind, on message: MessageID, in chat: ChatID,
+                            add: Bool) async throws(DomainError) {
+        let type: ReactionType
+        switch kind {
+        case .emoji(let emoji): type = .reactionTypeEmoji(ReactionTypeEmoji(emoji: emoji))
+        case .customEmoji(let id): type = .reactionTypeCustomEmoji(ReactionTypeCustomEmoji(customEmojiId: TdInt64(id)))
+        case .paid: return   // Paid reactions spend Stars; never sent from a click.
+        }
+        try await run {
+            if add {
+                _ = try await self.client.addMessageReaction(
+                    chatId: chat.rawValue, isBig: false, messageId: message.rawValue,
+                    reactionType: type, updateRecentReactions: true)
+            } else {
+                _ = try await self.client.removeMessageReaction(
+                    chatId: chat.rawValue, messageId: message.rawValue, reactionType: type)
+            }
+        }
+    }
+
+    /// Reactions this chat allows on this message, most relevant first.
+    public func availableReactions(for message: MessageID, in chat: ChatID) async -> [ReactionSummary.Kind] {
+        guard let available = try? await client.getMessageAvailableReactions(
+            chatId: chat.rawValue, messageId: message.rawValue, rowSize: 8) else { return [] }
+        var seen = Set<ReactionSummary.Kind>()
+        return (available.topReactions + available.recentReactions + available.popularReactions)
+            .filter { !$0.needsPremium }
+            .compactMap { reaction -> ReactionSummary.Kind? in
+                switch reaction.type {
+                case .reactionTypeEmoji(let e): return .emoji(e.emoji)
+                case .reactionTypeCustomEmoji(let c): return .customEmoji(c.customEmojiId.rawValue)
+                case .reactionTypePaid: return nil
+                }
+            }
+            .filter { seen.insert($0).inserted }
+    }
+
+    /// The still image for a custom emoji, used to draw custom reactions.
+    public func customEmojiImage(_ id: Int64) async -> MediaFile? {
+        guard let stickers = try? await client.getCustomEmojiStickers(customEmojiIds: [TdInt64(id)]),
+              let sticker = stickers.stickers.first else { return nil }
+        let file: TDLibKit.File
+        if case .stickerFormatWebp = sticker.format {
+            file = sticker.sticker
+        } else if let thumb = sticker.thumbnail, MediaMapping.displayableThumbnail(thumb) != nil {
+            file = thumb.file
+        } else {
+            return nil
+        }
+        return await downloadAndWait(file.id, priority: 4) ?? MediaMapping.file(file)
+    }
+
+    // MARK: - Forward, link, edit, delete
+
+    /// Forwards messages. Hiding the sender sends a copy, as if written by the
+    /// user; hiding captions additionally strips media captions — Telegram's
+    /// own two options.
+    public func forward(_ messages: [MessageID], from source: ChatID, to targets: [ChatID],
+                        options: ForwardOptions) async throws(DomainError) {
+        for target in targets {
+            try await run {
+                _ = try await self.client.forwardMessages(
+                    chatId: target.rawValue,
+                    fromChatId: source.rawValue,
+                    messageIds: messages.map(\.rawValue),
+                    options: nil,
+                    removeCaption: !options.showSender && !options.showCaptions,
+                    sendCopy: !options.showSender,
+                    topicId: nil)
+            }
+        }
+    }
+
+    /// A t.me link to the message — available for channels and public groups.
+    public func messageLink(_ message: MessageID, in chat: ChatID) async -> String? {
+        try? await client.getMessageLink(
+            chatId: chat.rawValue, checklistTaskId: 0, forAlbum: false, inMessageThread: false,
+            mediaTimestamp: 0, messageId: message.rawValue, pollOptionId: "").link
+    }
+
+    public func deleteMessages(_ messages: [MessageID], in chat: ChatID, forEveryone: Bool) async throws(DomainError) {
+        try await run {
+            _ = try await self.client.deleteMessages(
+                chatId: chat.rawValue, messageIds: messages.map(\.rawValue), revoke: forEveryone)
+        }
+    }
+
+    public func editText(_ message: MessageID, in chat: ChatID, text: String) async throws(DomainError) {
+        try await run {
+            _ = try await self.client.editMessageText(
+                chatId: chat.rawValue,
+                inputMessageContent: .inputMessageText(InputMessageText(
+                    clearDraft: false, linkPreviewOptions: nil, text: FormattedText(entities: [], text: text))),
+                messageId: message.rawValue,
+                replyMarkup: nil)
+        }
+    }
+
+    public struct MessagePermissions: Sendable {
+        public let canEdit: Bool
+        public let canDeleteForEveryone: Bool
+        public let canDeleteForSelf: Bool
+        public let canForward: Bool
+        public let canReply: Bool
+        public let canGetLink: Bool
+    }
+
+    public func permissions(for message: MessageID, in chat: ChatID) async -> MessagePermissions? {
+        guard let p = try? await client.getMessageProperties(chatId: chat.rawValue, messageId: message.rawValue)
+        else { return nil }
+        return MessagePermissions(
+            canEdit: p.canBeEdited, canDeleteForEveryone: p.canBeDeletedForAllUsers,
+            canDeleteForSelf: p.canBeDeletedOnlyForSelf, canForward: p.canBeForwarded,
+            canReply: p.canBeReplied, canGetLink: p.canGetLink)
+    }
+
+    public func translate(_ text: String, to language: String) async -> String? {
+        try? await client.translateText(
+            text: FormattedText(entities: [], text: text), toLanguageCode: language, tone: nil).text
+    }
+
+    // MARK: - Comments
+
+    public struct CommentThread: Sendable {
+        /// The discussion group the comments live in.
+        public let chatID: ChatID
+        public let threadID: Int64
+    }
+
+    public func commentThread(for message: MessageID, in chat: ChatID) async throws(DomainError) -> CommentThread {
+        try await run {
+            let info = try await self.client.getMessageThread(chatId: chat.rawValue, messageId: message.rawValue)
+            return CommentThread(chatID: ChatID(info.chatId), threadID: info.messageThreadId)
+        }
+    }
+
+    /// Comments on a channel post, oldest first.
+    public func comments(on message: MessageID, in chat: ChatID, before: MessageID? = nil,
+                         limit: Int = 50) async throws(DomainError) -> [NodogramDomain.Message] {
+        try await run {
+            var collected: [TDLibKit.Message] = []
+            var seen = Set<Int64>()
+            var cursor = before?.rawValue ?? 0
+            for _ in 0..<6 where collected.count < limit {
+                let batch = try await self.client.getMessageThreadHistory(
+                    chatId: chat.rawValue, fromMessageId: cursor,
+                    limit: min(100, limit - collected.count),
+                    messageId: message.rawValue, offset: 0)
+                let fresh = (batch.messages ?? []).filter { seen.insert($0.id).inserted }
+                guard let oldest = fresh.last else { break }
+                collected += fresh
+                cursor = oldest.id
+            }
+            return collected.map(self.cache.mapMessage).sorted { $0.id.rawValue < $1.id.rawValue }
+        }
+    }
+
+    // MARK: - Global search
+
+    public enum MediaFilter: Sendable {
+        case photosAndVideos, files, links, voice, music
+    }
+
+    /// Searches all chats for one kind of content. `offset` is TDLib's paging
+    /// cursor: pass back `nextOffset` for the next page.
+    public func searchAll(_ filter: MediaFilter, query: String = "", offset: String = "",
+                          limit: Int = 60) async throws(DomainError) -> (messages: [NodogramDomain.Message], nextOffset: String) {
+        let tdFilter: SearchMessagesFilter = {
+            switch filter {
+            case .photosAndVideos: return .searchMessagesFilterPhotoAndVideo
+            case .files: return .searchMessagesFilterDocument
+            case .links: return .searchMessagesFilterUrl
+            case .voice: return .searchMessagesFilterVoiceNote
+            case .music: return .searchMessagesFilterAudio
+            }
+        }()
+        return try await run {
+            let found = try await self.client.searchMessages(
+                chatList: nil, chatTypeFilter: nil, filter: tdFilter, limit: limit,
+                maxDate: 0, minDate: 0, offset: offset, query: query)
+            return (found.messages.map(self.cache.mapMessage), found.nextOffset)
+        }
+    }
+
+    // MARK: - Stories
+
+    public func loadStories() async {
+        _ = try? await client.loadActiveStories(storyList: .storyListMain)
+    }
+
+    public func story(_ id: Int, of chat: ChatID) async -> StoryItem? {
+        guard let story = try? await client.getStory(onlyLocal: false, storyId: id, storyPosterChatId: chat.rawValue)
+        else { return nil }
+        let content: StoryItem.Content = {
+            switch story.content {
+            case .storyContentPhoto(let p):
+                return MediaMapping.photo(p.photo).map(StoryItem.Content.photo) ?? .unsupported
+            case .storyContentVideo(let v):
+                let video = v.video
+                return .video(VideoMedia(
+                    file: MediaMapping.file(video.video),
+                    thumbnail: MediaMapping.displayableThumbnail(video.thumbnail),
+                    minithumbnail: video.minithumbnail?.data,
+                    width: video.width, height: video.height, duration: Int(video.duration.rounded()),
+                    mimeType: "video/mp4", fileName: "", supportsStreaming: true))
+            default:
+                return .unsupported
+            }
+        }()
+        return StoryItem(
+            id: story.id, chatID: chat,
+            date: Date(timeIntervalSince1970: TimeInterval(story.date)),
+            caption: story.caption.text, entities: MediaMapping.entities(story.caption),
+            content: content)
+    }
+
+    /// Opening a story marks it viewed — the poster sees that, exactly as in
+    /// Telegram. Called only when the user actually opens one.
+    public func markStoryOpened(_ id: Int, of chat: ChatID) async {
+        _ = try? await client.openStory(storyId: id, storyPosterChatId: chat.rawValue)
+    }
+
+    public func markStoryClosed(_ id: Int, of chat: ChatID) async {
+        _ = try? await client.closeStory(storyId: id, storyPosterChatId: chat.rawValue)
     }
 
     // MARK: - Files
@@ -475,14 +757,14 @@ extension TelegramGateway: MediaByteSource {
     /// player does constantly while seeking. So the return value is not
     /// trusted: availability is confirmed with `getFileDownloadedPrefixSize`
     /// and the request repeated until the bytes are really there.
-    public func prepareRange(fileID: Int, offset: Int64, length: Int64) async throws {
+    public func prepareRange(fileID: Int, offset: Int64, length: Int64, priority: Int) async throws {
         guard length > 0 else { return }
         for _ in 0..<60 {
             try Task.checkCancellation()
             let available = try await client.getFileDownloadedPrefixSize(fileId: fileID, offset: offset).size
             if available >= length { return }
             _ = try await client.downloadFile(
-                fileId: fileID, limit: length, offset: offset, priority: 32, synchronous: true)
+                fileId: fileID, limit: length, offset: offset, priority: priority, synchronous: true)
         }
         throw DomainError.storageFailure(detail: "Bytes \(offset)+\(length) of file \(fileID) did not become available")
     }

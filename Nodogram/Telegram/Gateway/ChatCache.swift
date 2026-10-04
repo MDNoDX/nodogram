@@ -50,6 +50,8 @@ final class ChatCache: @unchecked Sendable {
     private var statuses: [Int64: UserStatus] = [:]
     /// The signed-in user. Their chat with themselves is "Saved Messages".
     private var myUserId: Int64?
+    /// Telegram's id for its own service notifications account.
+    private static let serviceAccountId: Int64 = 777000
 
     // MARK: - Applying updates
 
@@ -155,6 +157,20 @@ final class ChatCache: @unchecked Sendable {
         case .updateFile(let u):
             return [.fileUpdated(MediaMapping.file(u.file))]
 
+        case .updateMessageInteractionInfo(let u):
+            let info = interaction(u.interactionInfo, isChannelPost: nil)
+            return [.messageInteraction(ChatID(u.chatId), MessageID(u.messageId),
+                                        views: info.views, forwards: info.forwards,
+                                        reactions: info.reactions, comments: info.comments)]
+
+        case .updateChatActiveStories(let u):
+            let stories = u.activeStories
+            return [.storiesChanged(StoryOwner(
+                chatID: ChatID(stories.chatId),
+                storyIDs: stories.list == nil ? [] : stories.stories.map(\.storyId),
+                maxReadStoryID: stories.maxReadStoryId,
+                order: stories.order))]
+
         case .updateChatAction(let u):
             guard case .messageSenderUser(let sender) = u.senderId else { return [] }
             return [.chatActivity(ChatID(u.chatId), user: UserID(sender.userId), activity: Self.activity(u.action))]
@@ -182,6 +198,11 @@ final class ChatCache: @unchecked Sendable {
     func chat(_ id: Int64) -> NodogramDomain.Chat? {
         lock.lock(); defer { lock.unlock() }
         return records[id].map(domainChat)
+    }
+
+    func title(of chatId: Int64) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return records[chatId].map { $0.id == myUserId ? "Saved Messages" : $0.title }
     }
 
     func smallPhotoFileId(chatId: Int64) -> Int? {
@@ -260,12 +281,28 @@ final class ChatCache: @unchecked Sendable {
         let kind: ChatKind
         var presence: UserPresence?
         var isVerified = false
+        var isBot = false
+        var botActiveUsers = 0
+        var isServiceAccount = false
 
         switch record.type {
         case .chatTypePrivate(let t):
             kind = .privateChat(UserID(t.userId))
-            presence = statuses[t.userId].map(Self.presence)
             isVerified = users[t.userId]?.verificationStatus?.isVerified ?? false
+            switch users[t.userId]?.type {
+            case .userTypeBot(let bot):
+                // A bot is software: "online" or "last seen" would be fiction.
+                isBot = true
+                botActiveUsers = bot.activeUserCount
+            case .userTypeDeleted:
+                break
+            default:
+                if t.userId == Self.serviceAccountId || users[t.userId]?.isSupport == true {
+                    isServiceAccount = true
+                } else {
+                    presence = statuses[t.userId].map(Self.presence)
+                }
+            }
         case .chatTypeSecret(let t):
             kind = .secret
             presence = statuses[t.userId].map(Self.presence)
@@ -303,7 +340,10 @@ final class ChatCache: @unchecked Sendable {
             avatarThumbnail: record.photo?.minithumbnail?.data,
             presence: presence,
             draftText: record.draftText,
-            isSavedMessages: isSaved
+            isSavedMessages: isSaved,
+            isBot: isBot,
+            botActiveUsers: botActiveUsers,
+            isServiceAccount: isServiceAccount
         )
     }
 
@@ -346,6 +386,31 @@ final class ChatCache: @unchecked Sendable {
         }()
 
         let lastReadOutbox = records[message.chatId]?.lastReadOutboxMessageId ?? 0
+        let info = interaction(message.interactionInfo, isChannelPost: message.isChannelPost)
+
+        var replyToID: MessageID?
+        var replyPreview: ReplyPreview?
+        if case .messageReplyToMessage(let reply) = message.replyTo {
+            if reply.chatId == message.chatId || reply.chatId == 0 {
+                replyToID = MessageID(reply.messageId)
+            }
+            // Content is included when the replied message lives elsewhere
+            // (another chat) — then it is shown as-is.
+            if let content = reply.content {
+                let mapped = ContentMapping.map(content)
+                replyPreview = ReplyPreview(
+                    messageID: MessageID(reply.messageId),
+                    senderName: reply.origin.map(originName) ?? "",
+                    text: reply.quote?.text.text ?? (mapped.text.isEmpty ? (mapped.attachmentLabel ?? "") : mapped.text))
+            } else if let quote = reply.quote {
+                replyPreview = ReplyPreview(messageID: MessageID(reply.messageId), senderName: "", text: quote.text.text)
+            }
+        }
+
+        let threadID: Int64? = {
+            if case .messageTopicThread(let thread) = message.topicId { return thread.messageThreadId }
+            return nil
+        }()
 
         return NodogramDomain.Message(
             id: MessageID(message.id),
@@ -363,12 +428,25 @@ final class ChatCache: @unchecked Sendable {
             sendState: sendState,
             readDate: nil,
             isReadByRecipient: message.isOutgoing && message.id <= lastReadOutbox,
+            replyToMessageID: replyToID,
             attachmentLabel: content.attachmentLabel,
             isService: content.isService,
             entities: content.entities,
             media: MediaMapping.media(message.content),
             canBeSaved: message.canBeSaved,
-            albumID: message.mediaAlbumId.rawValue
+            albumID: message.mediaAlbumId.rawValue,
+            viewCount: info.views,
+            forwardCount: info.forwards,
+            reactions: info.reactions,
+            commentCount: info.comments,
+            forwardedFrom: message.forwardInfo.map {
+                ForwardOrigin(name: originName($0.origin),
+                              date: Date(timeIntervalSince1970: TimeInterval($0.date)))
+            },
+            replyPreview: replyPreview,
+            isChannelPost: message.isChannelPost,
+            authorSignature: message.authorSignature,
+            threadID: threadID
         )
     }
 
@@ -387,6 +465,46 @@ final class ChatCache: @unchecked Sendable {
         [user.firstName, user.lastName]
             .filter { !$0.isEmpty }
             .joined(separator: " ")
+    }
+
+    private struct Interaction {
+        var views = 0
+        var forwards = 0
+        var reactions: [ReactionSummary] = []
+        var comments: Int?
+    }
+
+    /// `isChannelPost` decides whether a reply count is a comments section;
+    /// nil (live updates) keeps whatever Telegram reports.
+    private func interaction(_ info: MessageInteractionInfo?, isChannelPost: Bool?) -> Interaction {
+        guard let info else { return Interaction() }
+        let reactions: [ReactionSummary] = (info.reactions?.reactions ?? []).compactMap { reaction in
+            let kind: ReactionSummary.Kind
+            switch reaction.type {
+            case .reactionTypeEmoji(let e): kind = .emoji(e.emoji)
+            case .reactionTypeCustomEmoji(let c): kind = .customEmoji(c.customEmojiId.rawValue)
+            case .reactionTypePaid: kind = .paid
+            }
+            return ReactionSummary(kind: kind, count: reaction.totalCount, isChosen: reaction.isChosen)
+        }
+        let comments: Int? = (isChannelPost ?? true) ? info.replyInfo.map(\.replyCount) : nil
+        return Interaction(views: info.viewCount, forwards: info.forwardCount, reactions: reactions, comments: comments)
+    }
+
+    /// Who a forward or cross-chat reply credits.
+    private func originName(_ origin: MessageOrigin) -> String {
+        switch origin {
+        case .messageOriginUser(let o):
+            return users[o.senderUserId].map(Self.fullName) ?? "Unknown"
+        case .messageOriginHiddenUser(let o):
+            return o.senderName
+        case .messageOriginChat(let o):
+            let title = records[o.senderChatId]?.title ?? "Group"
+            return o.authorSignature.isEmpty ? title : "\(title) (\(o.authorSignature))"
+        case .messageOriginChannel(let o):
+            let title = records[o.chatId]?.title ?? "Channel"
+            return o.authorSignature.isEmpty ? title : "\(title) (\(o.authorSignature))"
+        }
     }
 
     /// `nil` means the action was cancelled.

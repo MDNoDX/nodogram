@@ -42,6 +42,12 @@ public struct Chat: Identifiable, Hashable, Sendable {
     public var draftText: String?
     /// The user's own chat with themselves, presented as "Saved Messages".
     public var isSavedMessages: Bool
+    /// Bots never show presence: "online" is meaningless for software.
+    public var isBot: Bool
+    /// Monthly active users, which Telegram shows for bots instead of presence.
+    public var botActiveUsers: Int
+    /// Telegram's own service account ("Telegram" notifications).
+    public var isServiceAccount: Bool
 
     public init(
         id: ChatID,
@@ -61,7 +67,10 @@ public struct Chat: Identifiable, Hashable, Sendable {
         avatarThumbnail: Data? = nil,
         presence: UserPresence? = nil,
         draftText: String? = nil,
-        isSavedMessages: Bool = false
+        isSavedMessages: Bool = false,
+        isBot: Bool = false,
+        botActiveUsers: Int = 0,
+        isServiceAccount: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -81,6 +90,9 @@ public struct Chat: Identifiable, Hashable, Sendable {
         self.presence = presence
         self.draftText = draftText
         self.isSavedMessages = isSavedMessages
+        self.isBot = isBot
+        self.botActiveUsers = botActiveUsers
+        self.isServiceAccount = isServiceAccount
     }
 
     /// Unread state as the user perceives it: Telegram's count, or the explicit
@@ -171,6 +183,21 @@ public struct Message: Identifiable, Hashable, Sendable {
     public var canBeSaved: Bool
     /// Messages sharing a non-zero album id were sent together.
     public var albumID: Int64
+    /// Views, for channel posts.
+    public var viewCount: Int
+    public var forwardCount: Int
+    public var reactions: [ReactionSummary]
+    /// Number of comments, for channel posts with a discussion group; nil when
+    /// the post has no comments section at all.
+    public var commentCount: Int?
+    public var forwardedFrom: ForwardOrigin?
+    /// The quoted message, when Telegram supplied its content directly (replies
+    /// to other chats). Same-chat replies are resolved from loaded messages.
+    public var replyPreview: ReplyPreview?
+    public var isChannelPost: Bool
+    public var authorSignature: String
+    /// The comment thread this message belongs to, if any.
+    public var threadID: Int64?
     /// Set when the sender deleted this message after this Mac received it.
     /// Such a message exists only in Nodogram's local archive, never on
     /// Telegram, and is always shown as deleted — never passed off as live.
@@ -199,7 +226,16 @@ public struct Message: Identifiable, Hashable, Sendable {
         media: MessageMedia? = nil,
         canBeSaved: Bool = true,
         albumID: Int64 = 0,
-        deletedAt: Date? = nil
+        deletedAt: Date? = nil,
+        viewCount: Int = 0,
+        forwardCount: Int = 0,
+        reactions: [ReactionSummary] = [],
+        commentCount: Int? = nil,
+        forwardedFrom: ForwardOrigin? = nil,
+        replyPreview: ReplyPreview? = nil,
+        isChannelPost: Bool = false,
+        authorSignature: String = "",
+        threadID: Int64? = nil
     ) {
         self.id = id
         self.chatID = chatID
@@ -220,6 +256,15 @@ public struct Message: Identifiable, Hashable, Sendable {
         self.canBeSaved = canBeSaved
         self.albumID = albumID
         self.deletedAt = deletedAt
+        self.viewCount = viewCount
+        self.forwardCount = forwardCount
+        self.reactions = reactions
+        self.commentCount = commentCount
+        self.forwardedFrom = forwardedFrom
+        self.replyPreview = replyPreview
+        self.isChannelPost = isChannelPost
+        self.authorSignature = authorSignature
+        self.threadID = threadID
     }
 
     public var isDeleted: Bool { deletedAt != nil }

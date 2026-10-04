@@ -82,12 +82,17 @@ public struct VideoMedia: Hashable, Sendable {
     public let fileName: String
     /// Whether the file is laid out for playback before it fully downloads.
     public let supportsStreaming: Bool
+    /// A full-resolution cover image the sender attached, when there is one —
+    /// far sharper than the small thumbnail.
+    public let cover: MediaFile?
 
     public init(file: MediaFile, thumbnail: MediaFile?, minithumbnail: Data?, width: Int, height: Int,
-                duration: Int, mimeType: String, fileName: String, supportsStreaming: Bool) {
+                duration: Int, mimeType: String, fileName: String, supportsStreaming: Bool,
+                cover: MediaFile? = nil) {
         self.file = file; self.thumbnail = thumbnail; self.minithumbnail = minithumbnail
         self.width = width; self.height = height; self.duration = duration
         self.mimeType = mimeType; self.fileName = fileName; self.supportsStreaming = supportsStreaming
+        self.cover = cover
     }
 }
 
@@ -192,7 +197,8 @@ extension MessageMedia {
 /// the download finishes. Implemented by the Telegram gateway.
 public protocol MediaByteSource: Sendable {
     /// Returns once `length` bytes from `offset` are available locally.
-    func prepareRange(fileID: Int, offset: Int64, length: Int64) async throws
+    /// `priority` is 1…32: playback asks for 32, background poster frames low.
+    func prepareRange(fileID: Int, offset: Int64, length: Int64, priority: Int) async throws
     func readRange(fileID: Int, offset: Int64, count: Int64) async throws -> Data
 }
 
