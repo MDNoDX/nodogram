@@ -214,3 +214,62 @@ struct MediaMappingTests {
         #expect(MediaMapping.waveform(Data()).isEmpty)
     }
 }
+
+@Suite("PollMapping")
+struct PollMappingTests {
+
+    private func poll(_ json: String) throws -> MessagePoll {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard case .messagePoll(let poll) = try decoder.decode(MessageContent.self, from: Data(json.utf8)) else {
+            throw CancellationError()
+        }
+        return poll
+    }
+
+    private func option(_ text: String, votes: Int, pct: Int, chosen: Bool = false) -> String {
+        #"{"@type":"pollOption","id":"\#(text)","text":{"@type":"formattedText","text":"\#(text)","entities":[]},"# +
+        #""voter_count":\#(votes),"vote_percentage":\#(pct),"is_chosen":\#(chosen),"is_being_chosen":false,"# +
+        #""recent_voter_ids":[],"addition_date":0}"#
+    }
+
+    private func json(type: String, order: [Int] = [], chosenFirst: Bool = false) -> String {
+        """
+        {"@type":"messagePoll","can_add_option":false,
+         "description":{"@type":"formattedText","text":"Context","entities":[]},
+         "poll":{"@type":"poll","id":"77","question":{"@type":"formattedText","text":"Which?","entities":[]},
+           "options":[\(option("A", votes: 3, pct: 30, chosen: chosenFirst)),\(option("B", votes: 7, pct: 70))],
+           "total_voter_count":10,"recent_voter_ids":[],"is_anonymous":true,"allows_multiple_answers":false,
+           "allows_revoting":true,"can_get_voters":false,"can_see_results":\(chosenFirst),
+           "members_only":false,"country_codes":[],"option_order":\(order),
+           "open_period":0,"close_date":0,"is_closed":false,"type":\(type)}}
+        """
+    }
+
+    @Test("A regular poll maps question, description, options and counts")
+    func regular() throws {
+        let mapped = PollMapping.map(try poll(json(type: #"{"@type":"pollTypeRegular"}"#)))
+        #expect(mapped.question == "Which?")
+        #expect(mapped.details == "Context")
+        #expect(mapped.options.map(\.text) == ["A", "B"])
+        #expect(mapped.options.map(\.percentage) == [30, 70])
+        #expect(mapped.totalVoters == 10)
+        #expect(!mapped.showsResults)   // not voted yet
+    }
+
+    @Test("Display order follows option_order, while votes keep the original index")
+    func shuffledOrder() throws {
+        let mapped = PollMapping.map(try poll(json(type: #"{"@type":"pollTypeRegular"}"#, order: [1, 0])))
+        #expect(mapped.options.map(\.text) == ["B", "A"])
+        #expect(mapped.options.map(\.index) == [1, 0])
+    }
+
+    @Test("A quiz keeps its correct answers and explanation")
+    func quiz() throws {
+        let type = #"{"@type":"pollTypeQuiz","correct_option_ids":[1],"explanation":{"@type":"formattedText","text":"Because.","entities":[]}}"#
+        let mapped = PollMapping.map(try poll(json(type: type, chosenFirst: true)))
+        #expect(mapped.kind == .quiz(correct: [1], explanation: "Because."))
+        #expect(mapped.state(of: mapped.options[0]) == .wrong)
+        #expect(mapped.showsResults)
+    }
+}

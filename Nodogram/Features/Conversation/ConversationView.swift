@@ -471,8 +471,14 @@ private struct MessageBubble: View {
                     .lineLimit(1)
             }
 
-            if message.isDeleted, let label = message.attachmentLabel {
-                Label(label, systemImage: "paperclip")
+            if let poll = message.poll, !message.isDeleted {
+                PollView(
+                    poll: poll,
+                    isOutgoing: message.isOutgoing,
+                    onVote: { model.vote($0, in: message) },
+                    onRetract: { model.retractVote(in: message) })
+            } else if message.isDeleted, let label = message.attachmentLabel {
+                Label(label, systemImage: label == "Poll" || label == "Quiz" ? "chart.bar" : "paperclip")
                     .font(.system(size: 12.5))
                     .foregroundStyle(.secondary)
             } else if let media = message.media {
@@ -482,7 +488,7 @@ private struct MessageBubble: View {
                 AttachmentChip(label: label)
             }
 
-            if !message.text.isEmpty {
+            if !message.text.isEmpty, message.poll == nil || message.isDeleted {
                 Text(FormattedText.attributed(message.text, entities: message.entities, baseSize: 13.5))
                     .font(.system(size: 13.5))
                     .foregroundStyle(message.isDeleted ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))

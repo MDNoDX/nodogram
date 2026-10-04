@@ -171,6 +171,8 @@ public struct Message: Identifiable, Hashable, Sendable {
     public var canBeSaved: Bool
     /// Messages sharing a non-zero album id were sent together.
     public var albumID: Int64
+    /// A poll or quiz, rendered interactively rather than as a label.
+    public var poll: PollContent?
     /// Set when the sender deleted this message after this Mac received it.
     /// Such a message exists only in Nodogram's local archive, never on
     /// Telegram, and is always shown as deleted — never passed off as live.
@@ -199,7 +201,8 @@ public struct Message: Identifiable, Hashable, Sendable {
         media: MessageMedia? = nil,
         canBeSaved: Bool = true,
         albumID: Int64 = 0,
-        deletedAt: Date? = nil
+        deletedAt: Date? = nil,
+        poll: PollContent? = nil
     ) {
         self.id = id
         self.chatID = chatID
@@ -220,6 +223,7 @@ public struct Message: Identifiable, Hashable, Sendable {
         self.canBeSaved = canBeSaved
         self.albumID = albumID
         self.deletedAt = deletedAt
+        self.poll = poll
     }
 
     public var isDeleted: Bool { deletedAt != nil }

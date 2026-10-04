@@ -52,8 +52,12 @@ enum ContentMapping {
             return .init(text: "", attachmentLabel: "Location")
         case .messageContact:
             return .init(text: "", attachmentLabel: "Contact")
-        case .messagePoll:
-            return .init(text: "", attachmentLabel: "Poll")
+        case .messagePoll(let v):
+            // The question doubles as the message text, so chat previews,
+            // search and the deleted-message archive all see something useful.
+            let isQuiz: Bool = { if case .pollTypeQuiz = v.poll.type { return true }; return false }()
+            return .init(text: v.poll.question.text, attachmentLabel: isQuiz ? "Quiz" : "Poll",
+                         entities: MediaMapping.entities(v.poll.question))
         case .messageChecklist:
             return .init(text: "", attachmentLabel: "Checklist")
         case .messageStory:

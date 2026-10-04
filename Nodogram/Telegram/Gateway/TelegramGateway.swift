@@ -54,6 +54,9 @@ public enum TelegramEvent: Sendable {
     case fileUpdated(MediaFile)
     /// Someone started or stopped typing, recording, etc. `nil` = stopped.
     case chatActivity(ChatID, user: UserID, activity: ChatActivity?)
+    /// A poll's votes or state changed. `details` is empty here; keep the
+    /// description already known from the message.
+    case pollUpdated(PollContent)
 }
 
 /// Which of Telegram's chat lists to load.
@@ -360,6 +363,29 @@ public final class TelegramGateway: @unchecked Sendable {
         }
     }
 
+    // MARK: - Polls
+
+    /// Casts a vote. `options` are Telegram option indexes (`Option.index`),
+    /// not display positions. An empty list retracts the vote.
+    public func vote(_ options: [Int], on message: MessageID, in chat: ChatID) async throws(DomainError) {
+        try await run {
+            _ = try await self.client.setPollAnswer(
+                chatId: chat.rawValue, messageId: message.rawValue, optionIds: options)
+        }
+    }
+
+    /// Recent polls in one chat, newest first. Telegram's *global* search
+    /// ignores the poll filter (verified: it returned photos and videos), so
+    /// polls must be searched per chat. Searching marks nothing as read.
+    public func polls(in chat: ChatID, limit: Int = 5) async throws(DomainError) -> [NodogramDomain.Message] {
+        try await run {
+            let found = try await self.client.searchChatMessages(
+                chatId: chat.rawValue, filter: .searchMessagesFilterPoll, fromMessageId: 0,
+                limit: limit, offset: 0, query: "", senderId: nil, topicId: nil)
+            return found.messages.map(self.cache.mapMessage)
+        }
+    }
+
     // MARK: - Files
 
     /// Starts (or reprioritises) a download. Progress arrives as `fileUpdated`
@@ -448,9 +474,9 @@ public final class TelegramGateway: @unchecked Sendable {
         var size = 0
         sysctlbyname("hw.model", nil, &size, nil, 0)
         guard size > 0 else { return "Mac" }
-        var bytes = [CChar](repeating: 0, count: size)
+        var bytes = [UInt8](repeating: 0, count: size)
         sysctlbyname("hw.model", &bytes, &size, nil, 0)
-        return String(cString: bytes)
+        return String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
     }
 
     private static var systemVersion: String {

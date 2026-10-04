@@ -115,6 +115,12 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
+            name: "NodogramFeaturesTests",
+            dependencies: ["NodogramFeatures", "NodogramDomain", "NodogramUI"],
+            path: "Tests/Unit/Features",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
             name: "NodogramCoreTests",
             dependencies: ["NodogramCore", "NodogramDomain"],
             path: "Tests/Unit/Core",

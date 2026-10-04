@@ -250,6 +250,18 @@ public final class AppModel {
         case .fileUpdated(let file):
             files.apply(file)
 
+        case .pollUpdated(let poll):
+            for index in messages.indices where messages[index].poll?.id == poll.id {
+                let details = messages[index].poll?.details ?? ""
+                messages[index].poll = PollContent(
+                    id: poll.id, question: poll.question, questionEntities: poll.questionEntities,
+                    details: details, options: poll.options, totalVoters: poll.totalVoters,
+                    isAnonymous: poll.isAnonymous, allowsMultipleAnswers: poll.allowsMultipleAnswers,
+                    allowsRevoting: poll.allowsRevoting, canSeeResults: poll.canSeeResults,
+                    isClosed: poll.isClosed, closeDate: poll.closeDate, kind: poll.kind,
+                    restriction: poll.restriction)
+            }
+
         case .chatActivity(let chatID, let user, let activity):
             if let activity {
                 activities[chatID, default: [:]][user] = (activity, Date())
@@ -311,6 +323,36 @@ public final class AppModel {
             // "Saved" must work even when Saved Messages is not among the
             // chats loaded so far.
             await gateway.ensurePrivateChat(with: me)
+
+            // Diagnostic: `--args -NodogramPollProbe YES` logs the structure of
+            // recent real polls — counts and flags only, never text.
+            if UserDefaults.standard.bool(forKey: "NodogramPollProbe") {
+                try? await Task.sleep(for: .seconds(4))   // let the chat list load
+                var polls: [Message] = []
+                let candidates = self?.chatsByID.values.filter { chat in
+                    switch chat.kind {
+                    case .basicGroup, .supergroup, .channel: return chat.order != 0
+                    default: return false
+                    }
+                } ?? []
+                for chat in candidates.prefix(60) where polls.count < 25 {
+                    polls += (try? await gateway.polls(in: chat.id, limit: 3)) ?? []
+                }
+                log.info("poll probe: chats=\(candidates.prefix(60).count) found=\(polls.count) mapped=\(polls.filter { $0.poll != nil }.count)")
+                for message in polls {
+                    guard let poll = message.poll else {
+                        log.info("poll probe UNMAPPED label=\(message.attachmentLabel ?? "nil", privacy: .public)")
+                        continue
+                    }
+                    log.info("""
+                        poll options=\(poll.options.count) voters=\(poll.totalVoters) quiz=\(poll.isQuiz) \
+                        multi=\(poll.allowsMultipleAnswers) voted=\(poll.hasVoted) closed=\(poll.isClosed) \
+                        canSeeResults=\(poll.canSeeResults) showsResults=\(poll.showsResults) \
+                        pctSum=\(poll.options.map(\.percentage).reduce(0, +)) restricted=\(poll.restriction != nil) \
+                        emptyOptionText=\(poll.options.contains { $0.text.isEmpty }) hasQuestion=\(!poll.question.isEmpty)
+                        """)
+                }
+            }
 
             // Developer convenience for verifying the conversation view without
             // UI automation: `open Nodogram.app --args -NodogramOpenSavedOnLaunch YES`.
@@ -576,6 +618,33 @@ public final class AppModel {
 
     public func closeViewer() {
         viewerMessageID = nil
+    }
+
+    // MARK: - Polls
+
+    /// Votes for the given Telegram option indexes. Telegram reflects the
+    /// change back through `updatePoll` (first as "being chosen"), so nothing
+    /// is faked locally.
+    public func vote(_ options: [Int], in message: Message) {
+        guard let gateway, !options.isEmpty else { return }
+        Task { [weak self] in
+            do {
+                try await gateway.vote(options, on: message.id, in: message.chatID)
+            } catch {
+                self?.showToast(Self.describe(error))
+            }
+        }
+    }
+
+    public func retractVote(in message: Message) {
+        guard let gateway else { return }
+        Task { [weak self] in
+            do {
+                try await gateway.vote([], on: message.id, in: message.chatID)
+            } catch {
+                self?.showToast(Self.describe(error))
+            }
+        }
     }
 
     // MARK: - Composer

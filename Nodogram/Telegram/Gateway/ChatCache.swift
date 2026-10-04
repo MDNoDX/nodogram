@@ -155,6 +155,10 @@ final class ChatCache: @unchecked Sendable {
         case .updateFile(let u):
             return [.fileUpdated(MediaMapping.file(u.file))]
 
+        case .updatePoll(let u):
+            // Votes, closing and quiz answers all arrive this way.
+            return [.pollUpdated(PollMapping.map(u.poll, details: ""))]
+
         case .updateChatAction(let u):
             guard case .messageSenderUser(let sender) = u.senderId else { return [] }
             return [.chatActivity(ChatID(u.chatId), user: UserID(sender.userId), activity: Self.activity(u.action))]
@@ -368,7 +372,11 @@ final class ChatCache: @unchecked Sendable {
             entities: content.entities,
             media: MediaMapping.media(message.content),
             canBeSaved: message.canBeSaved,
-            albumID: message.mediaAlbumId.rawValue
+            albumID: message.mediaAlbumId.rawValue,
+            poll: {
+                if case .messagePoll(let poll) = message.content { return PollMapping.map(poll) }
+                return nil
+            }()
         )
     }
 
