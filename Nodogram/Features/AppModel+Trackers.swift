@@ -267,7 +267,11 @@ extension AppModel {
 
     /// Counts and, if wanted, notifies about messages others just deleted.
     func announceDeleted(_ messages: [Message], in chatID: ChatID) {
-        guard !messages.isEmpty else { return }
+        // Deletions in groups and channels stay inside that chat, marked in
+        // place; only messages someone deleted in a private chat with the
+        // user are announced and listed under Deleted. TDLib gives private
+        // chats positive ids and groups/channels negative ones.
+        guard !messages.isEmpty, chatID.rawValue > 0 else { return }
         if selectedDestination != .localArchive { unseenDeletedCount += messages.count }
         guard TrackerSettings.flag(TrackerSettings.deletedNotifyKey),
               chatsByID[chatID]?.isMuted != true else { return }

@@ -62,6 +62,7 @@ extension AppModel {
         guard keepsDeletedMessages else { return [] }
         if archive == nil, let archiveDirectory { openArchive(in: archiveDirectory) }
         guard let archive else { return [] }
-        return await archive.recentlyDeleted(limit: 300)
+        // Private chats only: group deletions are shown inside the group.
+        return await archive.recentlyDeleted(limit: 500).filter { $0.chatID.rawValue > 0 }
     }
 }
