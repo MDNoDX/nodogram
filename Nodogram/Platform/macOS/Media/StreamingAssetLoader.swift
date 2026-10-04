@@ -44,7 +44,11 @@ public final class StreamingAssetLoader: NSObject, AVAssetResourceLoaderDelegate
     /// An asset whose bytes are served by this loader. The loader must be
     /// kept alive for as long as the asset is in use.
     public func makeAsset(fileExtension: String) -> AVURLAsset {
-        let url = URL(string: "\(Self.scheme)://file/\(fileID).\(fileExtension.isEmpty ? "mp4" : fileExtension)")!
+        // File names come from senders; keep only characters a URL accepts.
+        let clean = String(fileExtension.lowercased().unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) && $0.isASCII }.prefix(8))
+        let url = URL(string: "\(Self.scheme)://file/\(fileID).\(clean.isEmpty ? "mp4" : clean)")
+            ?? URL(string: "\(Self.scheme)://file/\(fileID).mp4")!
         let asset = AVURLAsset(url: url)
         asset.resourceLoader.setDelegate(self, queue: queue)
         return asset

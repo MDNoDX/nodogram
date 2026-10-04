@@ -99,3 +99,18 @@ private actor FakeByteSource: MediaByteSource {
         return data.subdata(in: range)
     }
 }
+
+@Suite("StreamingAssetLoader URLs")
+struct StreamingAssetLoaderURLTests {
+    @Test("Odd file extensions never produce an invalid URL", arguments: ["MP4 ", "м4в", "mp4?x=1", "", "a b/c"])
+    func oddExtensions(ext: String) {
+        let loader = StreamingAssetLoader(source: NeverSource(), fileID: 7, size: 10, mimeType: "video/mp4")
+        let asset = loader.makeAsset(fileExtension: ext)
+        #expect(asset.url.scheme == StreamingAssetLoader.scheme)
+    }
+}
+
+private final class NeverSource: MediaByteSource, @unchecked Sendable {
+    func prepareRange(fileID: Int, offset: Int64, length: Int64, priority: Int) async throws {}
+    func readRange(fileID: Int, offset: Int64, count: Int64) async throws -> Data { Data() }
+}
