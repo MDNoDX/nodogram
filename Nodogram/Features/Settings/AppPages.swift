@@ -304,6 +304,34 @@ struct FeaturesPage: View {
     }
 }
 
+// MARK: - Language
+
+struct LanguagePage: View {
+    @AppStorage("translate.target") private var target = "uz"
+
+    private static let languages: [(String, String)] = [
+        ("uz", "Oʻzbekcha"), ("ru", "Русский"), ("en", "English"), ("tr", "Türkçe"),
+        ("ar", "العربية"), ("kk", "Қазақша"), ("de", "Deutsch"), ("fr", "Français"),
+    ]
+
+    var body: some View {
+        SettingsForm {
+            Section {
+                LabeledContent("Interface", value: "English")
+            } header: { Text("Interface language") } footer: {
+                SettingsNote("Nodogram's own interface is in English for now.")
+            }
+            Section {
+                Picker("Translate messages to", selection: $target) {
+                    ForEach(Self.languages, id: \.0) { Text($0.1).tag($0.0) }
+                }
+            } header: { Text("Translation") } footer: {
+                SettingsNote("Right-click a message and choose Translate. Translation is done by Telegram.")
+            }
+        }
+    }
+}
+
 // MARK: - About
 
 struct AboutPage: View {

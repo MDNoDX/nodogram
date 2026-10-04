@@ -22,6 +22,8 @@ struct SettingsDetailView: View {
             case .sidebar: SidebarPage(model: model)
             case .nodogramFeatures: FeaturesPage(model: model)
             case .about: AboutPage(model: model)
+            case .language: LanguagePage()
+            case .filters: AboutPage(model: model)
             }
         }
         .id(model.settingsPage)

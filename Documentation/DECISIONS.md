@@ -313,3 +313,19 @@ Also kept locally, all from data Telegram already delivers to this client:
 named verbatim in ToS 1.4 as forbidden ("tampering with the 'read' statuses of
 messages (e.g. implementing a 'ghost mode')"). Clients that ship it risk the
 user's api_id and account; Nodogram does not.
+
+---
+
+## D16 — The master key lives in an owner-only file, not the Keychain
+
+**Date:** 2026-10-04 · **Status:** settled until builds carry a Team ID
+
+Builds without an Apple Developer Team ID get a new code identity every
+build, and the Keychain ties approval to that identity, so it asked for the
+login password on every update. The key now lives in
+`accounts/<id>/master.key` (0600, excluded from backups), as Telegram Desktop
+keeps its local key; at-rest protection is the user account plus FileVault.
+The first launch of this version reads the old Keychain item once and moves
+it. Nodogram also now sets Telegram's `online` option from app focus (online
+while active, offline 15 s after), and keeps running in the menu bar when the
+window closes so updates keep arriving.

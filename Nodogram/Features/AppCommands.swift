@@ -80,6 +80,13 @@ public struct NodogramCommands: Commands {
         }
 
         CommandMenu("Go") {
+            Button("Back") { model?.goBack() }
+                .keyboardShortcut("[", modifiers: .command)
+                .disabled(model?.canGoBack != true)
+            Button("Forward") { model?.goForward() }
+                .keyboardShortcut("]", modifiers: .command)
+                .disabled(model?.canGoForward != true)
+            Divider()
             ForEach(SidebarDestination.allCases.filter { $0 != .settings }) { destination in
                 if let index = destination.keyboardShortcutIndex {
                     Button(destination.title) { model?.selectedDestination = destination }

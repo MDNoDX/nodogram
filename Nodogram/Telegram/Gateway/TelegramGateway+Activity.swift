@@ -14,6 +14,13 @@ extension TelegramGateway {
         cache.user(id.rawValue).map(ChatCache.displayName)
     }
 
+    /// Telegram's support account, as a private chat.
+    public func supportChat() async -> ChatID? {
+        guard let user = try? await client.getSupportUser(),
+              let chat = try? await client.createPrivateChat(force: false, userId: user.id) else { return nil }
+        return ChatID(chat.id)
+    }
+
     // MARK: - Groups
 
     public func myGroups() -> [GroupSummary] {

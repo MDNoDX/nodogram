@@ -409,6 +409,15 @@ public final class TelegramGateway: @unchecked Sendable {
         try await run { _ = try await self.client.setDatabaseEncryptionKey(newEncryptionKey: key) }
     }
 
+    // MARK: - Presence
+
+    /// Tells Telegram whether the user is using the app right now. Official
+    /// clients set this on focus changes; without it the user would always
+    /// appear offline, which the API terms (1.4) count as wrong status display.
+    public func setOnline(_ online: Bool) async {
+        _ = try? await client.setOption(name: "online", value: .optionValueBoolean(OptionValueBoolean(value: online)))
+    }
+
     // MARK: - Notifications
 
     /// TDLib sends no notification updates until this is set. It then applies

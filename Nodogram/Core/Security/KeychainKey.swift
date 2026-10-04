@@ -56,7 +56,7 @@ public enum KeychainKey {
         SecItemDelete(query as CFDictionary)
     }
 
-    private static func load(service: String, account: String) throws -> SymmetricKey? {
+    public static func load(service: String, account: String) throws -> SymmetricKey? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

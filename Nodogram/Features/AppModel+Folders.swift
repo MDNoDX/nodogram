@@ -42,8 +42,12 @@ extension AppModel {
     // MARK: - Folder selection
 
     public func selectFolder(_ id: Int) {
+        let replaying = isReplayingNavigation
+        isReplayingNavigation = true
         selectedDestination = .allChats
+        isReplayingNavigation = replaying
         selectedFolderID = id
+        noteNavigation()
         loadMoreChats(in: .folder(id))
     }
 

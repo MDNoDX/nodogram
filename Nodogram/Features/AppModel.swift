@@ -54,6 +54,7 @@ public final class AppModel {
         didSet {
             selectedFolderID = nil
             if selectedDestination == .archived { loadMoreChats(in: .archive) }
+            noteNavigation()
         }
     }
     /// The user's Telegram chat folders, in their order.
@@ -61,7 +62,14 @@ public final class AppModel {
     /// A Telegram folder shown in the chat list, when one is selected.
     public internal(set) var selectedFolderID: Int?
     /// The page open in Settings (shown in the window, like Telegram's).
-    public var settingsPage: SettingsPage = .profile
+    public var settingsPage: SettingsPage = .profile {
+        didSet { noteNavigation() }
+    }
+    /// Back/forward history, like a browser's.
+    public internal(set) var navBack: [NavigationState] = []
+    public internal(set) var navForward: [NavigationState] = []
+    var lastNavigation: NavigationState?
+    var isReplayingNavigation = false
     /// Sidebar items the user hid, and the order of the built-in ones.
     public internal(set) var sidebarPrefs = SidebarPrefs.load()
     public var searchText: String = ""
@@ -185,6 +193,8 @@ public final class AppModel {
     var openTypingSessions: [String: UUID] = [:]
     var typingNotifiedAt: [ChatID: Date] = [:]
     var typingSweepTask: Task<Void, Never>?
+    var presenceObservers: [any NSObjectProtocol] = []
+    var offlineTask: Task<Void, Never>?
     var storyPollTask: Task<Void, Never>?
     /// Messages the user starred, newest first. Local to this Mac.
     public var starred: [StarredMessage] = StarredMessage.loadAll()
@@ -265,7 +275,7 @@ public final class AppModel {
 
         do {
             let directories = try Self.accountDirectories()
-            guard loadMasterKey() else { return }
+            guard loadMasterKey(directory: directories.root) else { return }
             openArchive(in: directories.root)
             try await initializeEncrypted(gateway, credentials: credentials, directories: directories)
             connectNotifications()
@@ -444,6 +454,7 @@ public final class AppModel {
         Task { await gateway.enableNotifications() }
         Task { await gateway.loadStories() }
         startStoryViewerPolling()
+        startPresenceTracking()
 
         Task { [weak self] in
             guard let me = try? await gateway.myUserID() else { return }
@@ -530,6 +541,7 @@ public final class AppModel {
         }
 
         selectedChatID = chatID
+        noteNavigation()
         pendingJumpID = nil
         if let chatID { noteRecentlyViewed(chatID) }
         messages = []
@@ -964,6 +976,10 @@ public final class AppModel {
         gateway = nil
     }
 
+    /// The app's model. It outlives the window: closing the window leaves
+    /// Nodogram running in the menu bar, still receiving updates.
+    public static let shared = AppModel()
+
     /// The model of the open window, for the app delegate's quit path.
     public static weak var current: AppModel?
 
@@ -975,6 +991,7 @@ public final class AppModel {
         }
         TypingEvent.saveAll(typingLog)
         StoryViewersStore.save(storyViewers)
+        await gateway?.setOnline(false)
         await gateway?.closeAndWait()
         eventTask?.cancel()
         gateway = nil
@@ -989,21 +1006,36 @@ public final class AppModel {
     /// and only after TDLib confirms success is that recorded — so a failure
     /// at any step leaves a working (if unencrypted) database rather than a
     /// locked-out user.
-    /// Reads the master key once per launch. Returns false — and shows why —
-    /// when the session database is encrypted and the key cannot be read:
+    /// Reads the master key once per launch: from its local file; on the
+    /// first launch of this version, once from the Keychain (where earlier
+    /// versions kept it) and then never again. Returns false — and explains —
+    /// only when the session is encrypted and the key cannot be found, since
     /// opening it without the key would look like a sign-out.
-    private func loadMasterKey() -> Bool {
+    private func loadMasterKey(directory: URL) -> Bool {
         if masterKey != nil { return true }
+        if let key = LocalKeyStore.load(directory: directory) {
+            masterKey = key
+            return true
+        }
+        let encrypted = UserDefaults.standard.bool(forKey: "tdlib.databaseEncrypted.default")
         do {
-            masterKey = try KeychainKey.loadOrCreate(service: "app.nodogram.tdlib", account: "default")
+            if encrypted {
+                guard let key = try KeychainKey.load(service: "app.nodogram.tdlib", account: "default") else {
+                    phase = .storageLocked(detail: "The key for the saved session is missing.")
+                    return false
+                }
+                try LocalKeyStore.save(key, directory: directory)
+                masterKey = key
+            } else {
+                masterKey = try LocalKeyStore.generate(directory: directory)
+            }
             return true
         } catch {
             log.error("master key unavailable: \(String(describing: error), privacy: .public)")
-            if UserDefaults.standard.bool(forKey: "tdlib.databaseEncrypted.default") {
-                phase = .storageLocked(detail: "Nodogram couldn't read its key from the Keychain (\(error)).")
+            if encrypted {
+                phase = .storageLocked(detail: "Nodogram couldn't read its key from the Keychain (\(error)). This is needed once.")
                 return false
             }
-            // Never encrypted yet: carry on unencrypted, as before.
             return true
         }
     }

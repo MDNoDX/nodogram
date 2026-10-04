@@ -187,7 +187,8 @@ extension AppModel {
 
     /// Translates into the Mac's preferred language.
     public func translate(_ message: Message) async -> String? {
-        let language = Locale.preferredLanguages.first.map { String($0.prefix(2)) } ?? "en"
+        let language = UserDefaults.standard.string(forKey: "translate.target")
+            ?? Locale.preferredLanguages.first.map { String($0.prefix(2)) } ?? "en"
         return await gateway?.translate(message.text, to: language)
     }
 
@@ -491,6 +492,21 @@ extension AppModel {
                     self?.showToast(Self.describe(error))
                 }
             }
+        }
+    }
+
+    // MARK: - Support
+
+    /// Opens a chat with Telegram's support volunteers ("Ask a Question").
+    public func openSupportChat() {
+        guard let gateway else { return }
+        Task { [weak self] in
+            guard let chat = await gateway.supportChat() else {
+                self?.showToast("Couldn't reach Telegram support.")
+                return
+            }
+            self?.selectedDestination = .allChats
+            self?.select(chat)
         }
     }
 }

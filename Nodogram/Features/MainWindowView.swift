@@ -9,14 +9,18 @@ import NodogramDomain
 import NodogramUI
 
 public struct MainWindowView: View {
-    @State private var model = AppModel()
+    /// One model for the whole app, so Nodogram keeps receiving updates —
+    /// typing, deletions, story views — while its window is closed.
+    private let model: AppModel
     @AppStorage(Theme.colorSchemeKey) private var colorScheme = "system"
     @AppStorage(Theme.accentKey) private var accentIndex = 0
     @AppStorage(Theme.textSizeKey) private var textSize = 13.5
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var confirmingSignOut = false
 
-    public init() {}
+    public init(model: AppModel = .shared) {
+        self.model = model
+    }
 
     public var body: some View {
         Group {
@@ -38,9 +42,9 @@ public struct MainWindowView: View {
                         .foregroundStyle(Theme.accent)
                     Text("Nodogram needs Keychain access").font(.title2.weight(.semibold))
                     Text("""
-                        Your chats are safe on this Mac — they are encrypted with a key kept in your Keychain, \
-                        and Nodogram couldn't read it just now. Click Try Again; when macOS asks, enter your \
-                        login password and choose “Always Allow”.
+                        Your chats are safe on this Mac. Nodogram is moving its key out of the Keychain so \
+                        macOS stops asking for your password; it needs to read it there one last time. \
+                        Click Try Again and, when macOS asks, enter your login password and choose “Allow”.
                         """)
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.secondary)
@@ -119,6 +123,32 @@ public struct MainWindowView: View {
         }
     }
 
+    /// Mouse side buttons and a two-finger swipe go back and forward, as in
+    /// Safari and Finder.
+    private func installNavigationGestures() {
+        guard !Self.gesturesInstalled else { return }
+        Self.gesturesInstalled = true
+        NSEvent.addLocalMonitorForEvents(matching: [.otherMouseDown, .swipe]) { event in
+            let back: Bool?
+            switch event.type {
+            case .otherMouseDown where event.buttonNumber == 3: back = true
+            case .otherMouseDown where event.buttonNumber == 4: back = false
+            case .swipe where event.deltaX > 0: back = true
+            case .swipe where event.deltaX < 0: back = false
+            default: back = nil
+            }
+            guard let back else { return event }
+            MainActor.assumeIsolated {
+                let model = AppModel.shared
+                if model.viewerMessageID != nil || model.storyViewer != nil { return }
+                if back { model.goBack() } else { model.goForward() }
+            }
+            return nil
+        }
+    }
+
+    @MainActor private static var gesturesInstalled = false
+
     private var mainLayout: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(model: model, onSignOut: { confirmingSignOut = true })
@@ -143,6 +173,17 @@ public struct MainWindowView: View {
             .frame(minWidth: Theme.Metrics.conversationMinWidth)
         }
         .navigationSplitViewStyle(.balanced)
+        .toolbar {
+            ToolbarItemGroup(placement: .navigation) {
+                Button { model.goBack() } label: { Image(systemName: "chevron.left") }
+                    .disabled(!model.canGoBack)
+                    .help("Back (⌘[)")
+                Button { model.goForward() } label: { Image(systemName: "chevron.right") }
+                    .disabled(!model.canGoForward)
+                    .help("Forward (⌘])")
+            }
+        }
+        .onAppear(perform: installNavigationGestures)
         // Content-sized minimum: the window cannot be made smaller than what
         // fits, so nothing — the composer above all — is ever cut off.
         .frame(minWidth: 960, minHeight: 600)
