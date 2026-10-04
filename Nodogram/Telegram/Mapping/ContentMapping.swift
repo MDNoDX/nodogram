@@ -124,11 +124,105 @@ enum ContentMapping {
         case .messageChatBoost:
             return service("boosted the group")
 
+        // Content added in 2025–2026
+        case .messageRichMessage(let v):
+            let text = richText(v.message.blocks)
+            return .init(text: text, attachmentLabel: text.isEmpty ? "Article" : nil)
+        case .messageStakeDice:
+            return .init(text: "", attachmentLabel: "🎲 Dice")
+        case .messageGameScore:
+            return service("scored in a game")
+        case .messageGiveaway, .messageGiveawayCreated:
+            return .init(text: "", attachmentLabel: "🎁 Giveaway")
+        case .messageGiveawayCompleted, .messageGiveawayWinners:
+            return service("finished a giveaway")
+        case .messageGiveawayPrizeStars, .messageGiftedStars, .messageGiftedGrams:
+            return service("sent a gift")
+        case .messageGiftedPremium, .messagePremiumGiftCode:
+            return service("gifted Telegram Premium")
+        case .messageChecklistTasksAdded:
+            return service("added tasks to a checklist")
+        case .messageChecklistTasksDone:
+            return service("completed tasks in a checklist")
+        case .messagePollOptionAdded:
+            return service("added a poll option")
+        case .messagePollOptionDeleted:
+            return service("removed a poll option")
+        case .messageCustomServiceAction(let v):
+            return service(v.text)
+        case .messageChatOwnerChanged:
+            return service("transferred ownership")
+        case .messageChatOwnerLeft:
+            return service("left; ownership passed on")
+        case .messageChatHasProtectedContentToggled, .messageChatHasProtectedContentDisableRequested:
+            return service("changed content protection")
+        case .messageChatAddedToCommunity, .messageChatJoinFromCommunity:
+            return service("joined a community")
+        case .messageChatRemovedFromCommunity:
+            return service("left a community")
+        case .messageForumTopicEdited, .messageForumTopicIsClosedToggled, .messageForumTopicIsHiddenToggled:
+            return service("updated a topic")
+        case .messageInviteVideoChatParticipants:
+            return service("invited members to the video chat")
+        case .messageProximityAlertTriggered:
+            return service("is nearby")
+        case .messageSuggestBirthdate:
+            return service("suggested a birthday")
+        case .messageSuggestProfilePhoto:
+            return service("suggested a profile photo")
+        case .messageBotWriteAccessAllowed:
+            return service("allowed the bot to message")
+        case .messageManagedBotCreated:
+            return service("created a bot")
+        case .messageChatShared, .messageUsersShared:
+            return service("shared a chat")
+        case .messageWebAppDataSent, .messageWebAppDataReceived:
+            return service("used a mini app")
+        case .messagePaymentSuccessful, .messagePaymentSuccessfulBot:
+            return service("made a payment")
+        case .messagePaymentRefunded, .messagePaidMessagesRefunded, .messageRefundedUpgradedGift:
+            return service("received a refund")
+        case .messagePaidMessagePriceChanged, .messageDirectMessagePriceChanged:
+            return service("changed the message price")
+        case .messageSuggestedPostApproved, .messageSuggestedPostPaid:
+            return service("approved a suggested post")
+        case .messageSuggestedPostDeclined, .messageSuggestedPostApprovalFailed, .messageSuggestedPostRefunded:
+            return service("declined a suggested post")
+        case .messageUpgradedGiftPurchaseOffer, .messageUpgradedGiftPurchaseOfferRejected:
+            return service("made a gift offer")
+        case .messagePassportDataSent, .messagePassportDataReceived:
+            return service("shared Telegram Passport data")
+
         case .messageUnsupported:
-            return .init(text: "", attachmentLabel: "Message not supported by this version")
-        default:
-            return .init(text: "", attachmentLabel: "Unsupported message")
+            return .init(text: "", attachmentLabel: "Newer message type — open it on your phone")
+        @unknown default:
+            // A type added by a newer TDLib: label it rather than fail.
+            return .init(text: "", attachmentLabel: "Message")
         }
+    }
+
+    /// The readable text of an article-style message, block by block. Built
+    /// by reflection so every kind of block and inline style contributes its
+    /// words, in order, without a case per TDLib type; links' URLs are left out.
+    static func richText(_ blocks: [PageBlock]) -> String {
+        func collect(_ value: Any, into parts: inout [String]) {
+            let mirror = Mirror(reflecting: value)
+            for child in mirror.children {
+                if child.label == "url" || child.label == "anchorName" || child.label == "language" { continue }
+                if let string = child.value as? String {
+                    if child.label == "text" || child.label == nil { parts.append(string) }
+                } else {
+                    collect(child.value, into: &parts)
+                }
+            }
+        }
+        return blocks.compactMap { block -> String? in
+            var parts: [String] = []
+            collect(block, into: &parts)
+            let line = parts.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+            return line.isEmpty ? nil : line
+        }
+        .joined(separator: "\n\n")
     }
 
     private static func service(_ action: String) -> MappedContent {
