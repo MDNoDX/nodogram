@@ -964,6 +964,22 @@ public final class AppModel {
         gateway = nil
     }
 
+    /// The model of the open window, for the app delegate's quit path.
+    public static weak var current: AppModel?
+
+    /// Quit path: saves what is pending, then closes TDLib and waits for it.
+    public func shutdownAndWait() async {
+        draftSaveTask?.cancel()
+        if let chatID = selectedChatID, let gateway, draftText != (chatsByID[chatID]?.draftText ?? "") {
+            await gateway.setDraft(draftText, chat: chatID)
+        }
+        TypingEvent.saveAll(typingLog)
+        StoryViewersStore.save(storyViewers)
+        await gateway?.closeAndWait()
+        eventTask?.cancel()
+        gateway = nil
+    }
+
     // MARK: - Database encryption
 
     /// TDLib's database is encrypted with a random key kept in the Keychain.

@@ -107,12 +107,7 @@ public struct MainWindowView: View {
                 }
             }
         }
-        .task {
-            // TDLib requires clients be closed before termination.
-            for await _ in NotificationCenter.default.notifications(named: NSApplication.willTerminateNotification) {
-                model.shutdown()
-            }
-        }
+        .onAppear { AppModel.current = model }
         .confirmationDialog(
             "Sign out of Nodogram?",
             isPresented: $confirmingSignOut,

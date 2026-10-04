@@ -86,4 +86,21 @@ struct TelegramGatewayTests {
 
         #expect(received == "1.8.67")
     }
+
+    @Test("Closing waits for TDLib to report the database closed")
+    func closeWaitsForClosed() async throws {
+        let gateway = TelegramGateway()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ng-close-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Placeholder credentials: TDLib opens its database locally before any
+        // network use, which is all closing needs.
+        try await gateway.initialize(
+            credentials: TelegramCredentials(apiID: 1, apiHash: "00000000000000000000000000000000"),
+            databaseDirectory: dir.appendingPathComponent("db"), filesDirectory: dir.appendingPathComponent("files"))
+        let start = Date()
+        await gateway.closeAndWait(timeout: 10)
+        // Well under the timeout: the signal came from TDLib, not the clock.
+        #expect(Date().timeIntervalSince(start) < 8)
+    }
 }

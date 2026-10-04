@@ -27,8 +27,24 @@ struct NodogramMain: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var isTerminating = false
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    /// TDLib must be closed before the process ends. Once it reports closed,
+    /// the process exits without running C++ static destructors, which would
+    /// otherwise race TDLib's receive thread and crash on the way out.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model = AppModel.current, !isTerminating else { return .terminateNow }
+        isTerminating = true
+        Task { @MainActor in
+            await model.shutdownAndWait()
+            UserDefaults.standard.synchronize()
+            _exit(0)
+        }
+        return .terminateLater
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

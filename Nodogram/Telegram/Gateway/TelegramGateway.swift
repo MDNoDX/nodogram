@@ -126,6 +126,8 @@ public final class TelegramGateway: @unchecked Sendable {
     /// one at a time would re-render the chat list thousands of times.
     public let events: AsyncStream<[TelegramEvent]>
     private let emitter: EventEmitter
+    /// Fires when TDLib reports `authorizationStateClosed`.
+    private let closed = ClosedSignal()
 
     public init() {
         let (stream, continuation) = AsyncStream<[TelegramEvent]>.makeStream(
@@ -135,13 +137,14 @@ public final class TelegramGateway: @unchecked Sendable {
         )
         let cache = ChatCache()
         let emitter = EventEmitter(continuation: continuation)
+        let closed = self.closed
         self.events = stream
         self.emitter = emitter
         self.cache = cache
 
         self.client = Self.sharedManager.createClient { data, _ in
             // Invoked on TDLibKit's per-client serial queue — already ordered.
-            Self.handle(data: data, cache: cache, emitter: emitter)
+            Self.handle(data: data, cache: cache, emitter: emitter, closed: closed)
         }
     }
 
@@ -180,6 +183,15 @@ public final class TelegramGateway: @unchecked Sendable {
     /// in the process and then busy-waits on them.
     public func shutdown() {
         try? client.close { _ in }
+        emitter.finish()
+    }
+
+    /// Closes TDLib and waits until it reports the database closed (or the
+    /// timeout passes). Quitting before that risks the database, and C++
+    /// teardown racing TDLib's receive thread crashed the app on exit.
+    public func closeAndWait(timeout: TimeInterval = 4) async {
+        try? client.close { _ in }
+        await closed.wait(timeout: timeout)
         emitter.finish()
     }
 
@@ -877,7 +889,8 @@ public final class TelegramGateway: @unchecked Sendable {
     private static func handle(
         data: Data,
         cache: ChatCache,
-        emitter: EventEmitter
+        emitter: EventEmitter,
+        closed: ClosedSignal
     ) {
         // Responses to requests carry "@extra" and are routed by TDLibKit before
         // reaching here; anything that fails to decode is not an update we model.
@@ -885,6 +898,7 @@ public final class TelegramGateway: @unchecked Sendable {
 
         switch update {
         case .updateAuthorizationState(let u):
+            if case .authorizationStateClosed = u.authorizationState { closed.fire() }
             if let state = AuthorizationMapping.map(u.authorizationState) {
                 emitter.emit([.authorizationStateChanged(state)])
             }
@@ -1002,5 +1016,46 @@ private final class EventEmitter: @unchecked Sendable {
 
     func finish() {
         queue.async { self.continuation.finish() }
+    }
+}
+
+/// A one-shot signal that can be awaited with a timeout, resumed exactly once
+/// per waiter whichever comes first.
+final class ClosedSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fired = false
+    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+
+    func fire() {
+        lock.lock()
+        fired = true
+        let pending = Array(waiters.values)
+        waiters = [:]
+        lock.unlock()
+        pending.forEach { $0.resume() }
+    }
+
+    func wait(timeout: TimeInterval) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if fired {
+                lock.unlock()
+                continuation.resume()
+                return
+            }
+            let token = UUID()
+            waiters[token] = continuation
+            lock.unlock()
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [weak self] in
+                self?.resume(token)
+            }
+        }
+    }
+
+    private func resume(_ token: UUID) {
+        lock.lock()
+        let continuation = waiters.removeValue(forKey: token)
+        lock.unlock()
+        continuation?.resume()
     }
 }
