@@ -3,6 +3,8 @@
 import SwiftUI
 import NodogramDomain
 import NodogramUI
+import NodogramPlatform
+import NodogramTelegram
 
 public struct ConversationView: View {
     private let model: AppModel
@@ -24,25 +26,38 @@ public struct ConversationView: View {
                 )
                 Divider()
 
-                MessageTimeline(model: model, chat: chat)
-                    .id(chat.id)   // fresh scroll state per chat
+                if let search = model.conversationSearch {
+                    ConversationSearchBar(model: model, state: search)
+                    Divider()
+                }
+
+                HStack(spacing: 0) {
+                    MessageTimeline(model: model, chat: chat)
+                        .id(chat.id)   // fresh scroll state per chat
+                        .frame(maxWidth: .infinity)
+                        .dropDestination(for: URL.self) { urls, _ in
+                            guard chat.canPost else { return false }
+                            attach(urls)
+                            return true
+                        }
+
+                    if let comments = model.comments {
+                        Divider()
+                        CommentsPanel(model: model, state: comments)
+                            .transition(.move(edge: .trailing))
+                    }
+                }
+                .animation(.easeOut(duration: 0.18), value: model.comments?.postMessageID)
 
                 if let error = model.conversationError {
                     ErrorBanner(message: error, onDismiss: model.dismissConversationError)
                 }
 
-                ComposerView(
-                    chatID: chat.id,
-                    text: Binding(
-                        get: { model.draftText },
-                        set: {
-                            model.draftText = $0
-                            model.draftTextChanged()
-                        }
-                    ),
-                    draftIndicatorVisible: model.draftIndicatorVisible,
-                    onSend: model.sendDraft
-                )
+                bottomBar(for: chat)
+            }
+            .background(ScreenshotProtection(isProtected: chat.hasProtectedContent))
+            .sheet(item: Binding(get: { model.forwardRequest }, set: { model.forwardRequest = $0 })) { request in
+                ForwardSheet(model: model, request: request)
             }
             .task {
                 while !Task.isCancelled {
@@ -60,13 +75,54 @@ public struct ConversationView: View {
         }
     }
 
+    /// The composer, or what replaces it: the selection bar while selecting,
+    /// and a Mute button in channels the user only reads — as in Telegram.
+    @ViewBuilder
+    private func bottomBar(for chat: Chat) -> some View {
+        if model.isSelecting {
+            SelectionBar(model: model)
+        } else if !chat.canPost {
+            ReadOnlyBar(model: model, chat: chat)
+        } else {
+            ComposerView(
+                chatID: chat.id,
+                text: Binding(
+                    get: { model.draftText },
+                    set: {
+                        model.draftText = $0
+                        model.draftTextChanged()
+                    }
+                ),
+                draftIndicatorVisible: model.draftIndicatorVisible,
+                mode: model.composerMode,
+                onCancelMode: model.cancelComposerMode,
+                onAttach: attach,
+                onSend: model.submitComposer
+            )
+        }
+    }
+
+    private func attach(_ urls: [URL]) {
+        Task {
+            var files: [OutgoingFile] = []
+            for url in urls { files.append(await OutgoingFiles.prepare(url)) }
+            model.send(files: files)
+        }
+    }
+
     private func subtitle(for chat: Chat, now: Date) -> String {
         if let activity = model.activityText(for: chat.id) { return activity }
         if chat.isSavedMessages { return "your cloud notes" }
+        if chat.isServiceAccount { return "service notifications" }
+        if chat.isBot {
+            return chat.botActiveUsers > 0 ? "bot · \(chat.botActiveUsers.formatted()) monthly users" : "bot"
+        }
         switch chat.kind {
         case .privateChat, .secret: return PresenceFormatter.describe(chat.presence, now: now) ?? ""
-        case .basicGroup, .supergroup: return "group"
-        case .channel: return "channel"
+        case .basicGroup, .supergroup:
+            return chat.memberCount > 0 ? "\(chat.memberCount.formatted()) members" : "group"
+        case .channel:
+            return chat.memberCount > 0 ? "\(chat.memberCount.formatted()) subscribers" : "channel"
         }
     }
 }
@@ -177,6 +233,25 @@ private struct MessageTimeline: View {
                             )
                             .id(message.id)
                             .onAppear { model.ensureReadDate(for: message) }
+                        case .album(let items, let position):
+                            let anchor = items.first { !$0.text.isEmpty } ?? items[0]
+                            MessageRow(
+                                model: model,
+                                message: anchor,
+                                position: position,
+                                showsSender: isGroup,
+                                showsReadLabel: items.contains { $0.id == lastOutgoingID },
+                                showsReceipts: !chat.isSavedMessages,
+                                album: items
+                            )
+                            .id(items[0].id)
+                            .onAppear { model.ensureReadDate(for: items[items.count - 1]) }
+                        }
+                    }
+
+                    if !model.hasNewerHistory {
+                        ForEach(model.sponsored) { item in
+                            SponsoredBubble(model: model, item: item)
                         }
                     }
 
@@ -185,6 +260,7 @@ private struct MessageTimeline: View {
                         // only estimates the height of rows it has not built.
                         .onScrollVisibilityChange(threshold: 0.01) { visible in
                             isNearBottom = visible
+                            if visible, model.hasNewerHistory { model.loadNewerMessages() }
                         }
                 }
                 .padding(.horizontal, 18)
@@ -227,6 +303,11 @@ private struct MessageTimeline: View {
                     withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(bottomID, anchor: .bottom) }
                 }
             }
+            // A jump (reply, search, notification) brings the message into view.
+            .onChange(of: model.highlightedMessageID) { _, id in
+                guard let id else { return }
+                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(id, anchor: .center) }
+            }
             // Older history was prepended: keep the message the user was
             // reading exactly where it was.
             .onChange(of: model.messages.first?.id) { old, new in
@@ -247,8 +328,9 @@ private struct MessageTimeline: View {
                 }
             }
             .overlay(alignment: .bottomTrailing) {
-                if !isNearBottom, isPositioned {
+                if (!isNearBottom && isPositioned) || model.hasNewerHistory {
                     Button {
+                        if model.hasNewerHistory { model.returnToLatest(); return }
                         withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) }
                     } label: {
                         Image(systemName: "chevron.down")
@@ -292,6 +374,9 @@ struct TimelineRow: Identifiable {
         case day(Date)
         case service(Message)
         case message(Message, GroupPosition)
+        /// Photos and videos sent as one album. The first message carrying a
+        /// caption anchors the bubble.
+        case album([Message], GroupPosition)
     }
 
     let id: String
@@ -312,7 +397,18 @@ struct TimelineRow: Identifiable {
             return a.isOutgoing || (a.senderID == b.senderID && a.senderName == b.senderName)
         }
 
-        for (index, message) in messages.enumerated() {
+        func isAlbumMedia(_ m: Message) -> Bool {
+            guard m.albumID != 0, !m.isDeleted else { return false }
+            switch m.media {
+            case .photo, .video, .animation: return true
+            default: return false
+            }
+        }
+
+        var index = 0
+        while index < messages.count {
+            let message = messages[index]
+            defer { index += 1 }
             let day = calendar.startOfDay(for: message.date)
             if day != lastDay {
                 rows.append(TimelineRow(id: "day-\(day.timeIntervalSince1970)", kind: .day(day)))
@@ -323,6 +419,24 @@ struct TimelineRow: Identifiable {
                 continue
             }
             let previous = index > 0 ? messages[index - 1] : nil
+
+            if isAlbumMedia(message) {
+                var end = index
+                while end + 1 < messages.count, messages[end + 1].albumID == message.albumID,
+                      isAlbumMedia(messages[end + 1]) { end += 1 }
+                if end > index {
+                    let items = Array(messages[index...end])
+                    let next = end + 1 < messages.count ? messages[end + 1] : nil
+                    let position = GroupPosition(
+                        isFirst: previous.map { !sameRun($0, message) } ?? true,
+                        isLast: next.map { !sameRun(items[items.count - 1], $0) } ?? true)
+                    rows.append(TimelineRow(id: "album-\(message.albumID)-\(message.id.rawValue)",
+                                            kind: .album(items, position)))
+                    index = end
+                    continue
+                }
+            }
+
             let next = index + 1 < messages.count ? messages[index + 1] : nil
             let position = GroupPosition(
                 isFirst: previous.map { !sameRun($0, message) } ?? true,
@@ -333,7 +447,7 @@ struct TimelineRow: Identifiable {
     }
 }
 
-private struct DaySeparator: View {
+struct DaySeparator: View {
     let date: Date
 
     var body: some View {
@@ -359,7 +473,7 @@ private struct DaySeparator: View {
     }
 }
 
-private struct ServiceLine: View {
+struct ServiceLine: View {
     let message: Message
 
     var body: some View {
@@ -377,17 +491,46 @@ private struct ServiceLine: View {
     }
 }
 
-private struct MessageRow: View {
+struct MessageRow: View {
     let model: AppModel
     let message: Message
     let position: GroupPosition
     let showsSender: Bool
     let showsReadLabel: Bool
     let showsReceipts: Bool
+    var album: [Message] = []
 
     private var showsAvatarColumn: Bool { showsSender && !message.isOutgoing }
 
+    private var isSelected: Bool { model.selectedMessageIDs.contains(message.id) }
+
     var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            if model.isSelecting, !message.isDeleted {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 19))
+                    .foregroundStyle(isSelected ? Theme.accent : .secondary)
+                    .accessibilityLabel(isSelected ? "Selected" : "Not selected")
+            }
+            content
+        }
+        .contentShape(Rectangle())
+        .overlay {
+            // In selection mode a click anywhere on the row toggles it.
+            if model.isSelecting, !message.isDeleted {
+                Color.clear.contentShape(Rectangle()).onTapGesture { model.toggleSelection(message) }
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Theme.accent.opacity(model.highlightedMessageID == message.id || isSelected ? 0.12 : 0))
+                .padding(.horizontal, -8)
+                .animation(.easeOut(duration: 0.3), value: model.highlightedMessageID)
+        )
+        .onAppear { model.ensureReplyPreview(for: message) }
+    }
+
+    private var content: some View {
         VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 3) {
             HStack(alignment: .bottom, spacing: 8) {
                 if message.isOutgoing { Spacer(minLength: 60) }
@@ -405,8 +548,24 @@ private struct MessageRow: View {
                     message: message,
                     position: position,
                     showsSenderName: showsSender && !message.isOutgoing && position.isFirst,
-                    showsReceipt: showsReceipts
+                    showsReceipt: showsReceipts,
+                    album: album
                 )
+
+                // Channel posts carry a one-click forward button, as in Telegram.
+                if message.isChannelPost, message.canBeSaved, !message.isDeleted, !model.isSelecting {
+                    Button {
+                        model.forward(album.isEmpty ? [message] : album)
+                    } label: {
+                        Image(systemName: "arrowshape.turn.up.right.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.accent)
+                            .frame(width: 30, height: 30)
+                            .background(Theme.accent.opacity(0.12), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Forward")
+                }
 
                 if !message.isOutgoing { Spacer(minLength: 60) }
             }
@@ -420,18 +579,27 @@ private struct MessageRow: View {
     }
 }
 
-private struct MessageBubble: View {
+struct MessageBubble: View {
     let model: AppModel
     let message: Message
     let position: GroupPosition
     let showsSenderName: Bool
     let showsReceipt: Bool
+    var album: [Message] = []
 
     @State private var spoilersRevealed = false
+    @State private var showsTranslation = false
+    @State private var deleteOptions: TelegramGateway.MessagePermissions?
+    @State private var confirmingDelete = false
 
     /// Media that looks best edge-to-edge, without bubble padding around it.
+    /// Posts with reactions, comments or a quote keep their bubble so those
+    /// have somewhere to sit.
     private var isBareMedia: Bool {
-        guard message.text.isEmpty, !message.isDeleted, let media = message.media else { return false }
+        guard message.text.isEmpty, !message.isDeleted, let media = message.media,
+              message.reactions.isEmpty, commentsAnchor == nil, message.forwardedFrom == nil,
+              message.replyToMessageID == nil else { return false }
+        if !album.isEmpty { return true }
         switch media {
         case .photo, .video, .animation, .videoNote, .sticker: return true
         default: return false
@@ -459,7 +627,54 @@ private struct MessageBubble: View {
             }
         }
         .opacity(message.isPending ? 0.75 : 1)
-        .contextMenu { MediaActions.menu(for: message, model: model) }
+        .contextMenu {
+            MessageMenu(model: model, message: message, reactions: model.chatReactions,
+                        onTranslate: { showsTranslation = true },
+                        onDelete: prepareDelete)
+        }
+        .popover(isPresented: $showsTranslation, arrowEdge: .trailing) {
+            TranslationPopover(model: model, message: message)
+        }
+        .confirmationDialog(deleteTitle, isPresented: $confirmingDelete, titleVisibility: .visible) {
+            if let options = deleteOptions {
+                if options.canDeleteForEveryone {
+                    Button(isChannel ? "Delete" : "Delete for Everyone", role: .destructive) {
+                        model.delete([message], forEveryone: true)
+                    }
+                }
+                if options.canDeleteForSelf {
+                    Button("Delete for Me", role: .destructive) { model.delete([message], forEveryone: false) }
+                }
+            }
+        } message: {
+            Text(deleteOptions?.canDeleteForEveryone == true && !isChannel
+                 ? "Deleting for everyone removes it from the chat for all members."
+                 : "This can't be undone.")
+        }
+    }
+
+    /// In an album only one message carries the discussion thread.
+    private var commentsAnchor: Message? {
+        message.commentCount != nil ? message : album.first { $0.commentCount != nil }
+    }
+
+    private var isChannel: Bool {
+        if case .channel = model.chatsByID[message.chatID]?.kind { return true }
+        return false
+    }
+
+    private var deleteTitle: String { "Delete this message?" }
+
+    private func prepareDelete() {
+        Task {
+            guard let options = await model.permissions(for: message),
+                  options.canDeleteForEveryone || options.canDeleteForSelf else {
+                model.showToast("You can't delete this message.")
+                return
+            }
+            deleteOptions = options
+            confirmingDelete = true
+        }
     }
 
     private var bubble: some View {
@@ -469,6 +684,14 @@ private struct MessageBubble: View {
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(Theme.senderColor(for: message.senderID?.rawValue ?? 0))
                     .lineLimit(1)
+            }
+
+            if let origin = message.forwardedFrom {
+                ForwardedHeader(origin: origin)
+            }
+
+            if let preview = model.replyPreview(for: message) {
+                ReplyQuote(preview: preview) { model.jump(to: preview.messageID) }
             }
 
             if let poll = message.poll, !message.isDeleted {
@@ -481,6 +704,10 @@ private struct MessageBubble: View {
                 Label(label, systemImage: label == "Poll" || label == "Quiz" ? "chart.bar" : "paperclip")
                     .font(.system(size: 12.5))
                     .foregroundStyle(.secondary)
+            } else if !album.isEmpty {
+                AlbumGrid(messages: album, model: model, width: 432)
+                    .padding(.horizontal, -6)
+                    .padding(.top, 2)
             } else if let media = message.media {
                 MessageMediaView(message: message, media: media, model: model)
                     .padding(.top, 2)
@@ -495,7 +722,7 @@ private struct MessageBubble: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .environment(\.openURL, OpenURLAction { url in
-                        NSWorkspace.shared.open(url)
+                        LinkPolicy.open(url)
                         return .handled
                     })
                     .overlay {
@@ -505,6 +732,15 @@ private struct MessageBubble: View {
                                 .help("Click to reveal")
                         }
                     }
+            }
+
+            if !message.reactions.isEmpty, !message.isDeleted {
+                ReactionsBar(model: model, message: message)
+            }
+
+            if let post = commentsAnchor, let count = post.commentCount, !message.isDeleted {
+                Divider().padding(.horizontal, -12)
+                CommentsBar(count: count, commenters: post.recentCommenters) { model.openComments(for: post) }
             }
 
             footer
@@ -534,7 +770,13 @@ private struct MessageBubble: View {
                     .foregroundStyle(Theme.senderColor(for: message.senderID?.rawValue ?? 0))
                     .padding(.leading, 4)
             }
-            MessageMediaView(message: message, media: media, model: model)
+            Group {
+                if album.isEmpty {
+                    MessageMediaView(message: message, media: media, model: model)
+                } else {
+                    AlbumGrid(messages: album, model: model)
+                }
+            }
                 .overlay(alignment: .bottomTrailing) {
                     footer
                         .foregroundStyle(.white)
@@ -558,6 +800,16 @@ private struct MessageBubble: View {
             } else if message.wasEdited {
                 Text(L10n.edited.lowercased())
                     .help(message.editDate.map { "Edited \(RelativeTimeFormatter.exact($0))" } ?? "")
+            }
+            if message.isChannelPost, !message.authorSignature.isEmpty {
+                Text(message.authorSignature).lineLimit(1)
+            }
+            if message.viewCount > 0 {
+                Image(systemName: "eye").font(.system(size: 9.5))
+                Text(message.viewCount >= 1000
+                     ? message.viewCount.formatted(.number.notation(.compactName))
+                     : "\(message.viewCount)")
+                    .help("\(message.viewCount.formatted()) views")
             }
             Text(message.date.formatted(.dateTime.hour().minute()))
                 .help(RelativeTimeFormatter.exact(message.date))

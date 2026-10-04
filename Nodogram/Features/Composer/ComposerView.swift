@@ -11,6 +11,9 @@ public struct ComposerView: View {
     private let chatID: ChatID
     @Binding private var text: String
     private let draftIndicatorVisible: Bool
+    private let mode: AppModel.ComposerMode
+    private let onCancelMode: () -> Void
+    private let onAttach: ([URL]) -> Void
     private let onSend: () -> Void
 
     @FocusState private var isFocused: Bool
@@ -19,11 +22,17 @@ public struct ComposerView: View {
         chatID: ChatID,
         text: Binding<String>,
         draftIndicatorVisible: Bool,
+        mode: AppModel.ComposerMode = .normal,
+        onCancelMode: @escaping () -> Void = {},
+        onAttach: @escaping ([URL]) -> Void = { _ in },
         onSend: @escaping () -> Void
     ) {
         self.chatID = chatID
         self._text = text
         self.draftIndicatorVisible = draftIndicatorVisible
+        self.mode = mode
+        self.onCancelMode = onCancelMode
+        self.onAttach = onAttach
         self.onSend = onSend
     }
 
@@ -35,7 +44,39 @@ public struct ComposerView: View {
         VStack(alignment: .leading, spacing: 0) {
             Divider()
 
+            if let banner = modeBanner {
+                HStack(spacing: 10) {
+                    Image(systemName: banner.icon)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.accent)
+                    RoundedRectangle(cornerRadius: 1.5).fill(Theme.accent).frame(width: 3, height: 30)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(banner.title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
+                        Text(banner.text).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button(action: onCancelMode) {
+                        Image(systemName: "xmark").font(.system(size: 11, weight: .semibold))
+                    }
+                    .buttonStyle(.borderless)
+                    .keyboardShortcut(.cancelAction)
+                    .help("Cancel (esc)")
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 9)
+            }
+
             HStack(alignment: .bottom, spacing: 10) {
+                Button(action: pickFiles) {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 30, height: 32)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("o", modifiers: .command)
+                .help("Attach files (⌘O) — or drop them onto the chat")
+
                 ZStack(alignment: .topLeading) {
                     if text.isEmpty {
                         Text(L10n.messagePlaceholder)
@@ -94,5 +135,27 @@ public struct ComposerView: View {
         .background(.bar)
         .onAppear { isFocused = true }
         .onChange(of: chatID) { _, _ in isFocused = true }
+        .onChange(of: mode) { _, _ in isFocused = true }
+    }
+
+    private var modeBanner: (icon: String, title: String, text: String)? {
+        switch mode {
+        case .normal:
+            return nil
+        case .replying(let message):
+            return ("arrowshape.turn.up.left", "Reply to \(message.isOutgoing ? "yourself" : message.senderName)",
+                    message.text.isEmpty ? (message.attachmentLabel ?? "Message") : message.text)
+        case .editing(let message):
+            return ("pencil", "Edit message", message.text)
+        }
+    }
+
+    private func pickFiles() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.message = "Choose photos, videos or files to send"
+        panel.prompt = "Send"
+        if panel.runModal() == .OK { onAttach(panel.urls) }
     }
 }

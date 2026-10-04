@@ -29,8 +29,13 @@ public final class StreamingAssetLoader: NSObject, AVAssetResourceLoaderDelegate
 
     public let queue = DispatchQueue(label: "app.nodogram.streaming")
 
-    public init(source: MediaByteSource, fileID: Int, size: Int64, mimeType: String) {
+    /// TDLib download priority for this asset's ranges: 32 for playback the
+    /// user is watching, low for background work like poster frames.
+    private let priority: Int
+
+    public init(source: MediaByteSource, fileID: Int, size: Int64, mimeType: String, priority: Int = 32) {
         self.source = source
+        self.priority = priority
         self.fileID = fileID
         self.size = size
         self.contentType = UTType(mimeType: mimeType)?.identifier ?? UTType.mpeg4Movie.identifier
@@ -91,13 +96,13 @@ public final class StreamingAssetLoader: NSObject, AVAssetResourceLoaderDelegate
                 try Task.checkCancellation()
                 let start = offset
                 let length = min(Self.chunk, end - start)
-                let source = self.source, fileID = self.fileID
+                let source = self.source, fileID = self.fileID, priority = self.priority
                 // One range at a time per file: TDLib re-targets a download when
                 // a second request with a different range arrives, so letting
                 // them race would make both slower.
                 let bytes: Data = try await gate.run {
                     try Task.checkCancellation()
-                    try await source.prepareRange(fileID: fileID, offset: start, length: length)
+                    try await source.prepareRange(fileID: fileID, offset: start, length: length, priority: priority)
                     return try await source.readRange(fileID: fileID, offset: start, count: length)
                 }
                 guard !bytes.isEmpty else { break }

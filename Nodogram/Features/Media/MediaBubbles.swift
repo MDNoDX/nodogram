@@ -7,13 +7,13 @@ import NodogramDomain
 import NodogramPlatform
 import NodogramUI
 
-/// Fits media into the bubble while keeping its aspect ratio.
-func fittedMediaSize(width: Int, height: Int, maxWidth: CGFloat = 340, maxHeight: CGFloat = 380) -> CGSize {
-    guard width > 0, height > 0 else { return CGSize(width: 240, height: 180) }
-    let scale = min(maxWidth / CGFloat(width), maxHeight / CGFloat(height), 1.6)
-    let w = max(140, CGFloat(width) * scale)
-    let h = max(90, CGFloat(height) * scale)
-    return CGSize(width: min(w, maxWidth), height: min(h, maxHeight))
+/// Fits media into the bubble at its exact aspect ratio. Only extreme shapes —
+/// a panorama or a phone-screen recording — are cropped, to a sensible minimum.
+func fittedMediaSize(width: Int, height: Int, maxWidth: CGFloat = 420, maxHeight: CGFloat = 460) -> CGSize {
+    guard width > 0, height > 0 else { return CGSize(width: 320, height: 180) }
+    let w = CGFloat(width), h = CGFloat(height)
+    let scale = min(maxWidth / w, maxHeight / h, 2)
+    return CGSize(width: max(min(w * scale, maxWidth), 120), height: max(min(h * scale, maxHeight), 72))
 }
 
 struct MessageMediaView: View {
@@ -45,14 +45,16 @@ struct MessageMediaView: View {
 
 // MARK: - Photo
 
-private struct PhotoBubble: View {
+struct PhotoBubble: View {
     let photo: PhotoMedia
     let model: AppModel
+    var tileSize: CGSize? = nil
+    var cornerRadius: CGFloat = 11
     let onOpen: () -> Void
 
     var body: some View {
         let state = model.files.state(for: photo.preview)
-        let size = fittedMediaSize(width: photo.width, height: photo.height)
+        let size = tileSize ?? fittedMediaSize(width: photo.width, height: photo.height)
 
         ZStack {
             MinithumbnailView(data: photo.minithumbnail)
@@ -62,7 +64,7 @@ private struct PhotoBubble: View {
             }
         }
         .frame(width: size.width, height: size.height)
-        .clipShape(RoundedRectangle(cornerRadius: 11))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
         .task(id: photo.preview.id) {
@@ -77,20 +79,29 @@ private struct PhotoBubble: View {
 
 // MARK: - Video and GIF
 
-private struct VideoBubble: View {
+struct VideoBubble: View {
     let video: VideoMedia
     let isAnimation: Bool
     let model: AppModel
+    var tileSize: CGSize? = nil
+    var cornerRadius: CGFloat = 11
     let onOpen: () -> Void
+
+    /// A full-resolution frame, once one is available.
+    @State private var posterPath: String?
 
     var body: some View {
         let state = model.files.state(for: video.file)
         let thumb = video.thumbnail.map { model.files.state(for: $0) }
-        let size = fittedMediaSize(width: video.width, height: video.height)
+        let cover = video.cover.map { model.files.state(for: $0) }
+        let size = tileSize ?? fittedMediaSize(width: video.width, height: video.height)
 
         ZStack {
             MinithumbnailView(data: video.minithumbnail)
             LocalImageView(path: thumb?.file.localPath, maxPixel: 700) { Color.clear }
+            if let sharp = cover?.file.localPath ?? posterPath {
+                LocalImageView(path: sharp, maxPixel: 1400) { Color.clear }
+            }
 
             if isAnimation, let path = state.file.localPath {
                 // GIFs play inline, silently and on loop, once downloaded.
@@ -122,14 +133,26 @@ private struct VideoBubble: View {
             .background(.black.opacity(0.5), in: Capsule())
             .padding(7)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 11))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
         .task(id: video.file.id) {
+            posterPath = VideoPosters.shared.cached(video.file.uniqueID)
             if let thumbnail = video.thumbnail { _ = await model.fetch(thumbnail, priority: 4) }
             // Small GIFs auto-download; full videos stream on demand instead.
             if isAnimation, !state.file.isComplete, video.file.size < 8 * 1024 * 1024 {
                 model.download(video.file, priority: 2)
+            }
+            if let cover = video.cover {
+                _ = await model.fetch(cover, priority: 3)
+            } else if !isAnimation, posterPath == nil {
+                // Give the cheap thumbnail a moment on screen, and skip videos
+                // the user only scrolled past.
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled else { return }
+                if let path = await VideoPosters.shared.poster(for: video, model: model) {
+                    withAnimation(.easeOut(duration: 0.2)) { posterPath = path }
+                }
             }
         }
         .accessibilityLabel(isAnimation ? "GIF" : "Video, \(formatDuration(Double(video.duration)))")
@@ -292,12 +315,13 @@ private struct VideoNoteBubble: View {
 
 struct PlayerLayerView: NSViewRepresentable {
     let player: AVPlayer
+    var gravity: AVLayerVideoGravity = .resizeAspectFill
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         view.wantsLayer = true
         let layer = AVPlayerLayer(player: player)
-        layer.videoGravity = .resizeAspectFill
+        layer.videoGravity = gravity
         layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         view.layer?.addSublayer(layer)
         return view
@@ -614,5 +638,114 @@ struct ProgressRing: View {
         }
         .frame(width: size, height: size)
         .accessibilityLabel(progress.map { "Downloading, \(Int($0 * 100)) percent" } ?? "Loading")
+    }
+}
+
+// MARK: - Albums
+
+/// Photos and videos sent together, laid out as a mosaic of justified rows:
+/// every row spans the full width and every tile keeps its aspect ratio,
+/// except where a row would be absurdly tall or thin.
+struct AlbumGrid: View {
+    let messages: [Message]
+    let model: AppModel
+    var width: CGFloat = 420
+
+    private static let spacing: CGFloat = 2
+
+    var body: some View {
+        let rows = Self.layout(messages.map(aspect), width: width)
+        VStack(spacing: Self.spacing) {
+            ForEach(rows.indices, id: \.self) { r in
+                HStack(spacing: Self.spacing) {
+                    ForEach(rows[r].items, id: \.index) { item in
+                        tile(messages[item.index], size: CGSize(width: item.width, height: rows[r].height))
+                    }
+                }
+            }
+        }
+        .frame(width: width)
+        .clipShape(RoundedRectangle(cornerRadius: 11))
+    }
+
+    @ViewBuilder
+    private func tile(_ message: Message, size: CGSize) -> some View {
+        Group {
+            switch message.media {
+            case .photo(let photo):
+                PhotoBubble(photo: photo, model: model, tileSize: size, cornerRadius: 0) { model.openViewer(message) }
+            case .video(let video):
+                VideoBubble(video: video, isAnimation: false, model: model, tileSize: size, cornerRadius: 0) {
+                    model.openViewer(message)
+                }
+            case .animation(let video):
+                VideoBubble(video: video, isAnimation: true, model: model, tileSize: size, cornerRadius: 0) {
+                    model.openViewer(message)
+                }
+            default:
+                Color.secondary.opacity(0.1).frame(width: size.width, height: size.height)
+            }
+        }
+        .contextMenu {
+            MessageMenu(model: model, message: message, reactions: model.chatReactions,
+                        onTranslate: {}, onDelete: { model.beginSelection(with: message) })
+        }
+    }
+
+    private func aspect(_ message: Message) -> CGFloat {
+        let size: (Int, Int)
+        switch message.media {
+        case .photo(let p): size = (p.width, p.height)
+        case .video(let v), .animation(let v): size = (v.width, v.height)
+        default: size = (1, 1)
+        }
+        guard size.0 > 0, size.1 > 0 else { return 1 }
+        return min(max(CGFloat(size.0) / CGFloat(size.1), 0.5), 2.5)
+    }
+
+    struct Row {
+        struct Item { let index: Int; let width: CGFloat }
+        let height: CGFloat
+        let items: [Item]
+    }
+
+    /// How many tiles go in each row, top to bottom — the shapes Telegram uses.
+    static func rowCounts(_ count: Int) -> [Int] {
+        switch count {
+        case ...1: return [max(count, 0)]
+        case 2: return [2]
+        case 3: return [1, 2]
+        case 4: return [1, 3]
+        case 5: return [2, 3]
+        case 6: return [3, 3]
+        case 7: return [2, 2, 3]
+        case 8: return [2, 3, 3]
+        case 9: return [3, 3, 3]
+        default: return [2, 2, 3, 3]
+        }
+    }
+
+    static func layout(_ aspects: [CGFloat], width: CGFloat) -> [Row] {
+        var rows: [Row] = []
+        var start = 0
+        for count in rowCounts(aspects.count) where count > 0 {
+            let slice = Array(aspects[start..<min(start + count, aspects.count)])
+            let gaps = spacing * CGFloat(slice.count - 1)
+            let usable = width - gaps
+            // Justified: the height at which these aspect ratios exactly fill the row.
+            let natural = usable / slice.reduce(0, +)
+            let height = min(max(natural, 90), slice.count == 1 ? 320 : 260)
+            let total = slice.reduce(0, +)
+            var items: [Row.Item] = []
+            var used: CGFloat = 0
+            for (offset, a) in slice.enumerated() {
+                let w = offset == slice.count - 1 ? usable - used : (usable * a / total).rounded()
+                used += w
+                items.append(.init(index: start + offset, width: w))
+            }
+            rows.append(Row(height: height.rounded(), items: items))
+            start += count
+        }
+        return rows
     }
 }

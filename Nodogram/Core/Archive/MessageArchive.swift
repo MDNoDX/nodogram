@@ -148,6 +148,20 @@ public actor MessageArchive {
         return rows.compactMap(open)
     }
 
+    /// The most recently deleted messages across all chats, newest deletion
+    /// first — the Local Archive section.
+    public func recentlyDeleted(limit: Int = 200) -> [Message] {
+        let rows: [Row] = (try? database.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT * FROM archived_message
+                WHERE deleted_at IS NOT NULL
+                ORDER BY deleted_at DESC
+                LIMIT ?
+                """, arguments: [limit])
+        }) ?? []
+        return rows.compactMap(open)
+    }
+
     // MARK: - Retention
 
     /// Drops ordinary (not deleted) records after `keepReceived`, and deleted

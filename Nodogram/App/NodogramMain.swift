@@ -27,41 +27,6 @@ struct NodogramMain: App {
     }
 }
 
-/// Menu bar commands. Every one carries its shortcut, so the menu doubles as
-/// discoverable documentation for the keyboard model (brief §20, §21).
-struct NodogramCommands: Commands {
-    var body: some Commands {
-        CommandGroup(replacing: .newItem) {
-            Button("New Message") {}
-                .keyboardShortcut("n", modifiers: .command)
-            Button("New Group") {}
-                .keyboardShortcut("n", modifiers: [.command, .shift])
-        }
-
-        CommandMenu("Chat") {
-            Button("Search Chats…") {}
-                .keyboardShortcut("k", modifiers: .command)
-            Button("Find in Conversation…") {}
-                .keyboardShortcut("f", modifiers: .command)
-            Divider()
-            Button("Mark Unread") {}
-                .keyboardShortcut("u", modifiers: [.command, .shift])
-            Button("Mute") {}
-                .keyboardShortcut("m", modifiers: [.command, .shift])
-            Button("Archive") {}
-                .keyboardShortcut("a", modifiers: [.command, .shift])
-        }
-
-        CommandGroup(replacing: .help) {
-            Button("Nodogram Documentation") {
-                if let url = URL(string: "https://github.com/MDNoDX/nodogram") {
-                    NSWorkspace.shared.open(url)
-                }
-            }
-        }
-    }
-}
-
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true

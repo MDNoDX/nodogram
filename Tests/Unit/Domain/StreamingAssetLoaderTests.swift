@@ -86,7 +86,7 @@ private actor FakeByteSource: MediaByteSource {
 
     init(data: Data) { self.data = data }
 
-    func prepareRange(fileID: Int, offset: Int64, length: Int64) async throws {
+    func prepareRange(fileID: Int, offset: Int64, length: Int64, priority: Int) async throws {
         // Simulate network latency so requests genuinely overlap.
         try await Task.sleep(for: .milliseconds(2))
         prepared.insert(integersIn: Int(offset)..<min(data.count, Int(offset + length)))

@@ -57,6 +57,7 @@ public enum MediaLibrary {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let destination = uniqueDestination(in: directory, name: sanitize(suggestedName))
         try FileManager.default.copyItem(at: URL(fileURLWithPath: localPath), to: destination)
+        Quarantine.mark(destination.path)
 
         var map = savedMap()
         map[uniqueID] = destination.path
@@ -77,7 +78,12 @@ public enum MediaLibrary {
 
     /// Opens a file in its default app — for documents, not for media, which
     /// plays inside Nodogram.
+    /// Files that can run code get the quarantine attribute and a warning first,
+    /// so Gatekeeper checks them like any other download.
+    @MainActor
     public static func open(localPath: String) {
+        Quarantine.mark(localPath)
+        guard Quarantine.confirmOpening(localPath) else { return }
         NSWorkspace.shared.open(URL(fileURLWithPath: localPath))
     }
 

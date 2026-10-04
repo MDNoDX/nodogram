@@ -184,7 +184,7 @@ the `api_id` being flagged. Recorded so the trade-off is deliberate.
 
 ## D9 — Messages deleted by others stay in place, marked deleted
 
-**Date:** 2026-10-01 · **Status:** settled, on by default at the user's request
+**Date:** 2026-10-01 · **Status:** amended 2026-10-04 — now off by default (see D13)
 
 Every message the Mac receives is recorded in `MessageArchive`
 (Nodogram/Core/Archive). When Telegram reports a permanent deletion, the
@@ -245,3 +245,43 @@ like a new app to the Keychain and macOS asked for the login password again.
 `Tools/build-app.sh` now pins the designated requirement to the bundle
 identifier. This is weaker than a certificate (another ad-hoc app could claim
 the identifier); setting `DEVELOPMENT_TEAM` replaces it with a real one.
+
+---
+
+## D13 — Telegram API Terms compliance
+
+**Date:** 2026-10-04 · **Status:** settled
+
+The audit found three conflicts with Telegram's API Terms of Service, which
+put the user's api_id at risk:
+
+- **Deleted-message archive (ToS 1.4).** Clients must not interfere with
+  self-destructing content. The archive is now **off by default**; it never
+  records self-destructing, auto-deleting or secret-chat messages
+  (`Message.isEphemeral`), nor messages in chats that forbid saving. A
+  one-time erase (`archive.complianceErase.v1`) removed anything recorded
+  under the old default.
+- **Sponsored messages (ToS 3.3).** Channels show Telegram's sponsored
+  messages at the end of the history, report views only once the full text is
+  visible, and report clicks — as the official apps do.
+- **Local data at rest.** The TDLib database is now encrypted with a key kept
+  in the Keychain (`app.nodogram.tdlib`); existing databases are migrated.
+
+Related hardening from the same audit: downloaded files get the
+`com.apple.quarantine` attribute and executables ask before opening; links
+open directly only for http(s), mailto, tel and tg — anything else asks.
+
+---
+
+## D14 — Staying on the newest TDLib automatically
+
+**Date:** 2026-10-04 · **Status:** settled
+
+`.github/workflows/update-tdlib.yml` runs daily. When Swiftgram publishes a
+newer TDLibKit build (ordered by publish date — tags share a version and differ
+only by hash), it moves the exact pin, builds, runs every test against the new
+binary, and opens a pull request that auto-merges if the repository allows
+it. Nothing reaches `main` untested. New TDLib versions sometimes rename API
+fields; when that breaks the build, the workflow fails visibly instead of
+opening a PR.
+

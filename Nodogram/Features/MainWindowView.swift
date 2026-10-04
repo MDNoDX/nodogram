@@ -12,6 +12,7 @@ public struct MainWindowView: View {
     @State private var model = AppModel()
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var confirmingSignOut = false
+    @Environment(\.openSettings) private var openSettings
 
     public init() {}
 
@@ -41,7 +42,21 @@ public struct MainWindowView: View {
             case .ready:
                 mainLayout
                     .overlay { MediaViewerOverlay(model: model) }
+                    .overlay { StoryViewerOverlay(model: model) }
+                    .overlay(alignment: .top) {
+                        if model.isPaletteVisible {
+                            ZStack(alignment: .top) {
+                                Color.black.opacity(0.18).ignoresSafeArea()
+                                    .onTapGesture { model.isPaletteVisible = false }
+                                CommandPalette(model: model).padding(.top, 90)
+                            }
+                            .transition(.opacity)
+                        }
+                    }
                     .animation(.easeOut(duration: 0.15), value: model.viewerMessageID)
+                    .animation(.easeOut(duration: 0.15), value: model.storyViewer)
+                    .animation(.easeOut(duration: 0.12), value: model.isPaletteVisible)
+                    .focusedSceneValue(\.appModel, model)
             }
         }
         .task {
@@ -86,14 +101,19 @@ public struct MainWindowView: View {
             SidebarView(
                 selection: Binding(
                     get: { model.selectedDestination },
-                    set: { model.selectedDestination = $0 }
+                    set: { destination in
+                        // Settings is its own window, not a section.
+                        if destination == .settings { openSettings() } else { model.selectedDestination = destination }
+                    }
                 ),
                 connectionState: model.connectionState,
                 unreadTotal: model.unreadTotal,
+                unreadChats: model.chatsByID.values.filter { $0.appearsUnread && !$0.isMuted }.count,
                 draftCount: model.draftCount,
+                starredCount: model.starred.count,
                 onSignOut: { confirmingSignOut = true }
             )
-            .navigationSplitViewColumnWidth(min: 190, ideal: 215, max: 280)
+            .navigationSplitViewColumnWidth(78)
         } content: {
             ChatListView(model: model)
                 .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 460)

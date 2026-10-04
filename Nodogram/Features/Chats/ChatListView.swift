@@ -19,11 +19,7 @@ public struct ChatListView: View {
 
         Group {
             if !model.destinationIsChatList {
-                EmptyStateView(
-                    icon: model.selectedDestination.icon,
-                    title: model.selectedDestination.title,
-                    message: "This section is planned for a later version of Nodogram. Your chats are under All Chats."
-                )
+                LibrarySectionView(model: model)
             } else if chats.isEmpty {
                 if model.isLoadingChats || (model.chatsByID.isEmpty && model.searchText.isEmpty) {
                     LoadingChatsView()
@@ -37,8 +33,10 @@ public struct ChatListView: View {
             } else {
                 List(selection: Binding(get: { model.selectedChatID }, set: { model.select($0) })) {
                     ForEach(chats) { chat in
-                        ChatRow(chat: chat, activity: model.activityText(for: chat.id))
+                        ChatRow(chat: chat, activity: model.activityText(for: chat.id),
+                                hasStories: model.storyOwners[chat.id]?.hasUnread == true)
                             .tag(chat.id)
+                            .contextMenu { ChatMenu(model: model, chat: chat) }
                             .onAppear {
                                 model.ensureAvatar(for: chat.id)
                                 // Page in more chats as the end comes into view.
@@ -50,6 +48,11 @@ public struct ChatListView: View {
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if model.selectedDestination == .allChats, model.searchText.isEmpty {
+                        StoriesStrip(model: model)
+                    }
+                }
             }
         }
         .navigationTitle(model.selectedDestination.title)
@@ -84,10 +87,12 @@ public struct ChatListView: View {
     }
 }
 
-private struct ChatRow: View {
+struct ChatRow: View {
     let chat: Chat
     /// "typing…" — shown in place of the preview, as Telegram does.
     let activity: String?
+    /// Unseen stories: the avatar gets a ring, as in Telegram.
+    var hasStories = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -99,6 +104,11 @@ private struct ChatRow: View {
                 isOnline: chat.presence == .online,
                 isSavedMessages: chat.isSavedMessages
             )
+            .overlay {
+                if hasStories {
+                    Circle().strokeBorder(Theme.accent, lineWidth: 2).padding(-3)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -217,6 +227,38 @@ private struct ChatRow: View {
             parts.append([last.senderName, last.displayText].compactMap { $0 }.joined(separator: ": "))
         }
         return parts.joined(separator: ", ")
+    }
+}
+
+/// Right-click actions on a chat, as in Telegram.
+struct ChatMenu: View {
+    let model: AppModel
+    let chat: Chat
+
+    var body: some View {
+        let isArchived = model.selectedDestination == .archived
+        if chat.unreadCount > 0 || chat.isMarkedAsUnread {
+            Button { model.markAsRead(chat.id) } label: { Label("Mark as Read", systemImage: "checkmark.message") }
+        } else {
+            Button { model.setMarkedUnread(true, chat: chat.id) } label: {
+                Label("Mark as Unread", systemImage: "message.badge")
+            }
+        }
+        Button { model.setPinned(!chat.isPinned, chat: chat.id) } label: {
+            Label(chat.isPinned ? "Unpin" : "Pin", systemImage: chat.isPinned ? "pin.slash" : "pin")
+        }
+        Button { model.setMuted(!chat.isMuted, chat: chat.id) } label: {
+            Label(chat.isMuted ? "Unmute" : "Mute", systemImage: chat.isMuted ? "bell" : "bell.slash")
+        }
+        if !chat.isSavedMessages {
+            Button { model.setArchived(!isArchived, chat: chat.id) } label: {
+                Label(isArchived ? "Unarchive" : "Archive", systemImage: isArchived ? "tray.and.arrow.up" : "archivebox")
+            }
+        }
+        if model.storyOwners[chat.id] != nil {
+            Divider()
+            Button { model.openStories(from: chat.id) } label: { Label("View Stories", systemImage: "circle.dashed") }
+        }
     }
 }
 

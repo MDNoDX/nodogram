@@ -54,10 +54,10 @@ public final class AppModel {
     // MARK: Conversation
 
     public private(set) var selectedChatID: ChatID?
-    public private(set) var messages: [Message] = []
-    public private(set) var isLoadingHistory = false
-    public private(set) var hasMoreHistory = true
-    public private(set) var conversationError: String?
+    public internal(set) var messages: [Message] = []
+    public internal(set) var isLoadingHistory = false
+    public internal(set) var hasMoreHistory = true
+    public internal(set) var conversationError: String?
 
     // MARK: Media
 
@@ -80,6 +80,56 @@ public final class AppModel {
         }
     }
 
+    // MARK: Conversation extras
+
+    /// What the composer is doing besides plain typing.
+    public enum ComposerMode: Equatable {
+        case normal
+        case replying(Message)
+        case editing(Message)
+    }
+    public var composerMode: ComposerMode = .normal
+
+    /// Multi-select ("Select" in the context menu).
+    public var isSelecting = false
+    public var selectedMessageIDs: Set<MessageID> = []
+
+    /// Messages waiting for the user to pick where to forward them.
+    public var forwardRequest: ForwardRequest?
+
+    /// Briefly highlighted after a jump (reply tap, search result).
+    public var highlightedMessageID: MessageID?
+    /// True after jumping into older history: newer messages are not loaded.
+    public internal(set) var hasNewerHistory = false
+
+    /// Official sponsored messages for the open channel (API terms 3.3).
+    public internal(set) var sponsored: [SponsoredItem] = []
+    @ObservationIgnored var sponsoredFetchedAt: [ChatID: Date] = [:]
+    @ObservationIgnored var sponsoredViewed: Set<MessageID> = []
+
+    /// Comment thread of a channel post, shown in a side panel.
+    public internal(set) var comments: CommentsState?
+
+    /// Quotes for replies whose original is not among loaded messages.
+    public internal(set) var replyPreviews: [MessageID: ReplyPreview] = [:]
+    @ObservationIgnored var requestedReplies: Set<MessageID> = []
+
+    /// Still images for custom-emoji reactions, by custom emoji id.
+    public internal(set) var customEmoji: [Int64: String] = [:]
+    @ObservationIgnored var requestedCustomEmoji: Set<Int64> = []
+
+    /// Chats that currently have stories, for the strip above the chat list.
+    public internal(set) var storyOwners: [ChatID: StoryOwner] = [:]
+    public var storyViewer: StoryViewerState?
+
+    /// Reactions the open chat allows, for the right-click reaction row.
+    public internal(set) var chatReactions: [ReactionSummary.Kind] = []
+
+    /// In-conversation search (⌘F).
+    public var conversationSearch: ConversationSearchState?
+    /// ⌘K palette.
+    public var isPaletteVisible = false
+
     // MARK: Activity
 
     /// Who is typing / recording where, with when it was last renewed.
@@ -89,18 +139,27 @@ public final class AppModel {
     // MARK: Composer
 
     public var draftText: String = ""
-    public private(set) var draftIndicatorVisible = false
+    public internal(set) var draftIndicatorVisible = false
 
     // MARK: Private
 
-    private var gateway: TelegramGateway?
+    var gateway: TelegramGateway?
     private var eventTask: Task<Void, Never>?
     private var draftSaveTask: Task<Void, Never>?
     private var exhaustedLists: Set<ChatListKind> = []
     private var requestedAvatars: Set<ChatID> = []
     private var requestedReadDates: Set<MessageID> = []
     private var didStartChatSync = false
-    private var archive: MessageArchive?
+    var archive: MessageArchive?
+    /// Set while a jump into another chat loads the history around its
+    /// target, so the chat's default "latest page" load does not replace it.
+    var pendingJumpID: MessageID?
+    var archiveDirectory: URL?
+    /// Messages the user starred, newest first. Local to this Mac.
+    public var starred: [StarredMessage] = StarredMessage.loadAll()
+    /// Chats opened recently, newest first — the Recently Viewed section.
+    public var recentChatIDs: [ChatID] = (UserDefaults.standard.array(forKey: "recentlyViewed.chats") as? [Int64] ?? [])
+        .map { ChatID($0) }
     private var activityPruneTask: Task<Void, Never>?
 
     public init() {}
@@ -173,11 +232,8 @@ public final class AppModel {
         do {
             let directories = try Self.accountDirectories()
             openArchive(in: directories.root)
-            try await gateway.initialize(
-                credentials: credentials,
-                databaseDirectory: directories.database,
-                filesDirectory: directories.files
-            )
+            try await initializeEncrypted(gateway, credentials: credentials, directories: directories)
+            connectNotifications()
             tdlibVersion = try? await gateway.tdlibVersion()
 
             // Ask for the current state rather than relying on an update that may
@@ -210,12 +266,14 @@ public final class AppModel {
 
         case .chatUpdated(let chat):
             chatsByID[chat.id] = chat
+            refreshBadge()
 
         case .chatAvatarReady(let chatID, let path):
             chatsByID[chatID]?.avatarPath = path
 
         case .messageAdded(let message):
             record([message])
+            appendToCommentsIfNeeded(message)
             guard message.chatID == selectedChatID,
                   !messages.contains(where: { $0.id == message.id }) else { return }
             insertSorted(message)
@@ -249,6 +307,20 @@ public final class AppModel {
 
         case .fileUpdated(let file):
             files.apply(file)
+
+        case .messageInteraction(let chatID, let messageID, let views, let forwards, let reactions, let comments):
+            applyInteraction(chatID: chatID, messageID: messageID, views: views, forwards: forwards,
+                             reactions: reactions, comments: comments)
+
+        case .storiesChanged(let owner):
+            if owner.storyIDs.isEmpty { storyOwners.removeValue(forKey: owner.chatID) }
+            else { storyOwners[owner.chatID] = owner }
+
+        case .notificationsAdded(let notifications):
+            deliverNotifications(notifications)
+
+        case .notificationsRemoved(let groupID, let ids):
+            SystemNotifications.shared.remove(groupID: groupID, ids: ids)
 
         case .pollUpdated(let poll):
             for index in messages.indices where messages[index].poll?.id == poll.id {
@@ -316,6 +388,8 @@ public final class AppModel {
         guard !didStartChatSync, let gateway else { return }
         didStartChatSync = true
         loadMoreChats(in: .main)
+        Task { await gateway.enableNotifications() }
+        Task { await gateway.loadStories() }
 
         Task { [weak self] in
             guard let me = try? await gateway.myUserID() else { return }
@@ -402,8 +476,19 @@ public final class AppModel {
         }
 
         selectedChatID = chatID
+        pendingJumpID = nil
+        if let chatID { noteRecentlyViewed(chatID) }
         messages = []
         hasMoreHistory = true
+        hasNewerHistory = false
+        composerMode = .normal
+        endSelection()
+        sponsored = []
+        chatReactions = []
+        comments = nil
+        conversationSearch = nil
+        highlightedMessageID = nil
+        if let chatID { SystemNotifications.shared.removeAll(forChat: chatID.rawValue) }
         conversationError = nil
         draftIndicatorVisible = false
         requestedReadDates = []
@@ -419,8 +504,14 @@ public final class AppModel {
                 log.info("history loaded count=\(loaded.count) stillSelected=\(self?.selectedChatID == chatID)")
                 guard let self, self.selectedChatID == chatID else { return }
                 self.record(loaded)
+                self.loadSponsored(for: chatID)
+                // A jump is loading a different part of the history.
+                guard self.pendingJumpID == nil else { return }
                 self.messages = await self.mergingDeleted(into: loaded, chatID: chatID, openEnded: true)
                 self.hasMoreHistory = !loaded.isEmpty
+                if let newest = loaded.last(where: { !$0.isService }) {
+                    self.chatReactions = await self.availableReactions(for: newest)
+                }
                 self.markVisibleAsRead(loaded.filter { !$0.isOutgoing }.suffix(50).map(\.id))
             } catch {
                 log.error("history failed: \(String(describing: error), privacy: .public)")
@@ -429,6 +520,18 @@ public final class AppModel {
             }
             self?.isLoadingHistory = false
         }
+    }
+
+    private func noteRecentlyViewed(_ chatID: ChatID) {
+        recentChatIDs.removeAll { $0 == chatID }
+        recentChatIDs.insert(chatID, at: 0)
+        if recentChatIDs.count > 40 { recentChatIDs.removeLast(recentChatIDs.count - 40) }
+        UserDefaults.standard.set(recentChatIDs.map(\.rawValue), forKey: "recentlyViewed.chats")
+    }
+
+    public func clearRecentlyViewed() {
+        recentChatIDs = []
+        UserDefaults.standard.removeObject(forKey: "recentlyViewed.chats")
     }
 
     /// Loads older messages when the user scrolls to the top.
@@ -465,12 +568,12 @@ public final class AppModel {
         }
     }
 
-    private func markVisibleAsRead(_ ids: [MessageID]) {
+    func markVisibleAsRead(_ ids: [MessageID]) {
         guard let gateway, let chatID = selectedChatID, !ids.isEmpty else { return }
         Task { await gateway.markRead(chatID, messages: ids) }
     }
 
-    private func insertSorted(_ message: Message) {
+    func insertSorted(_ message: Message) {
         let index = messages.firstIndex { $0.id.rawValue > message.id.rawValue } ?? messages.endIndex
         messages.insert(message, at: index)
     }
@@ -482,15 +585,39 @@ public final class AppModel {
     public static let keepDeletedKey = "privacy.keepDeletedMessages"
     public static let deletedRetentionKey = "privacy.deletedRetentionDays"
 
-    private var keepsDeletedMessages: Bool {
-        UserDefaults.standard.object(forKey: Self.keepDeletedKey) as? Bool ?? true
+    /// Off unless the user turns it on in Settings → Privacy, with the
+    /// explanation shown there. Keeping what senders deleted changes what they
+    /// can expect, so it is never on silently.
+    var keepsDeletedMessages: Bool {
+        UserDefaults.standard.object(forKey: Self.keepDeletedKey) as? Bool ?? false
     }
 
-    private func openArchive(in directory: URL) {
+    /// Opens the archive only when it is switched on: its key lives in the
+    /// Keychain, and reading it for a feature that is off would cost the user
+    /// a Keychain prompt for nothing.
+    func openArchive(in directory: URL) {
+        archiveDirectory = directory
         guard archive == nil else { return }
+        guard keepsDeletedMessages else {
+            // Old archives are erased without the key: deleting the files is enough.
+            if !UserDefaults.standard.bool(forKey: "archive.complianceErase.v1") {
+                UserDefaults.standard.set(true, forKey: "archive.complianceErase.v1")
+                for suffix in ["", "-wal", "-shm"] {
+                    try? FileManager.default.removeItem(at: directory.appendingPathComponent("archive.sqlite" + suffix))
+                }
+            }
+            return
+        }
         do {
             let archive = try MessageArchive.shared(directory: directory)
             self.archive = archive
+            // One-time: archives made before the compliance fix may hold
+            // self-destructing or protected content. They cannot be told apart
+            // after the fact, so they are erased once.
+            if !UserDefaults.standard.bool(forKey: "archive.complianceErase.v1") {
+                UserDefaults.standard.set(true, forKey: "archive.complianceErase.v1")
+                Task.detached { await archive.eraseAll() }
+            }
             let days = UserDefaults.standard.object(forKey: Self.deletedRetentionKey) as? Int ?? 365
             Task.detached {
                 // Ordinary messages are kept 90 days — long enough to catch a
@@ -504,9 +631,16 @@ public final class AppModel {
         }
     }
 
-    private func record(_ messages: [Message]) {
-        guard keepsDeletedMessages, let archive, !messages.isEmpty else { return }
-        Task.detached { await archive.record(messages) }
+    /// Records received messages for the deleted-message archive. Never
+    /// self-destructing or auto-deleting content (API terms 1.4), and never
+    /// content the sender protected from saving.
+    func record(_ messages: [Message]) {
+        guard keepsDeletedMessages else { return }
+        if archive == nil, let archiveDirectory { openArchive(in: archiveDirectory) }
+        guard let archive else { return }
+        let eligible = messages.filter { !$0.isEphemeral && $0.canBeSaved }
+        guard !eligible.isEmpty else { return }
+        Task.detached { await archive.record(eligible) }
     }
 
     /// Replaces deleted messages with their archived copies, marked deleted.
@@ -695,7 +829,7 @@ public final class AppModel {
     /// Typed throws do not survive inference through a `Task` closure, so the
     /// caught error is `any Error` even though the gateway only throws
     /// `DomainError`; this narrows it without a force cast.
-    private static func describe(_ error: any Error) -> String {
+    static func describe(_ error: any Error) -> String {
         (error as? DomainError)?.userFacingDescription
             ?? DomainError.protocolFailure(code: -1, message: "\(error)").userFacingDescription
     }
@@ -753,15 +887,58 @@ public final class AppModel {
         gateway = nil
     }
 
+    // MARK: - Database encryption
+
+    /// TDLib's database is encrypted with a random key kept in the Keychain.
+    ///
+    /// Databases created before this existed are unencrypted. They are opened
+    /// with the empty key once, re-encrypted with `setDatabaseEncryptionKey`,
+    /// and only after TDLib confirms success is that recorded — so a failure
+    /// at any step leaves a working (if unencrypted) database rather than a
+    /// locked-out user.
+    private func initializeEncrypted(_ gateway: TelegramGateway, credentials: TelegramCredentials,
+                                     directories: AccountDirectories) async throws {
+        let migratedKey = "tdlib.databaseEncrypted.default"
+        let key: Data
+        do {
+            key = try KeychainKey.loadOrCreate(service: "app.nodogram.tdlib", account: "default")
+                .withUnsafeBytes { Data($0) }
+        } catch {
+            log.error("tdlib key unavailable, staying unencrypted: \(String(describing: error), privacy: .public)")
+            try await gateway.initialize(credentials: credentials, databaseDirectory: directories.database,
+                                         filesDirectory: directories.files)
+            return
+        }
+
+        let hasDatabase = FileManager.default.fileExists(atPath: directories.database.appendingPathComponent("db.sqlite").path)
+        if UserDefaults.standard.bool(forKey: migratedKey) || !hasDatabase {
+            try await gateway.initialize(credentials: credentials, databaseDirectory: directories.database,
+                                         filesDirectory: directories.files, encryptionKey: key)
+            UserDefaults.standard.set(true, forKey: migratedKey)
+            return
+        }
+
+        // Existing unencrypted database: open it as it is, then re-encrypt.
+        try await gateway.initialize(credentials: credentials, databaseDirectory: directories.database,
+                                     filesDirectory: directories.files)
+        do {
+            try await gateway.setDatabaseKey(key)
+            UserDefaults.standard.set(true, forKey: migratedKey)
+            log.info("tdlib database re-encrypted")
+        } catch {
+            log.error("tdlib re-encryption failed, will retry next launch: \(String(describing: error), privacy: .public)")
+        }
+    }
+
     // MARK: - Storage layout
 
-    private struct AccountDirectories {
+    struct AccountDirectories {
         let root: URL
         let database: URL
         let files: URL
     }
 
-    private static func accountDirectories() throws -> AccountDirectories {
+    static func accountDirectories() throws -> AccountDirectories {
         let support = try FileManager.default.url(
             for: .applicationSupportDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true

@@ -32,7 +32,8 @@ enum MediaMapping {
                 minithumbnail: video.minithumbnail?.data,
                 width: video.width, height: video.height, duration: video.duration,
                 mimeType: video.mimeType, fileName: video.fileName,
-                supportsStreaming: video.supportsStreaming))
+                supportsStreaming: video.supportsStreaming,
+                cover: v.cover.flatMap(photo).map(\.preview)))
 
         case .messageAnimation(let v):
             let anim = v.animation
@@ -96,7 +97,7 @@ enum MediaMapping {
     static func photo(_ photo: Photo) -> PhotoMedia? {
         let sizes = photo.sizes.sorted { $0.width * $0.height < $1.width * $1.height }
         guard let largest = sizes.last else { return nil }
-        let preview = sizes.first { max($0.width, $0.height) >= 800 } ?? largest
+        let preview = sizes.first { max($0.width, $0.height) >= 1000 } ?? largest
         return PhotoMedia(
             preview: file(preview.photo), full: file(largest.photo),
             width: largest.width, height: largest.height,

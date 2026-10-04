@@ -1,0 +1,73 @@
+name: Update TDLib
+
+# Keeps Nodogram on the newest TDLib, so new Telegram features (and API layer
+# changes) arrive without anyone having to remember. Every day it checks the
+# newest TDLibKit release; when it differs from the pin, it moves the pin,
+# builds, runs the full test suite against the new binary, and only then
+# opens a pull request. If the repository allows auto-merge, the PR merges
+# itself once the regular CI is green.
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find the newest TDLibKit release
+        id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Tags share a version and differ by commit hash, so "newest" means
+          # most recently published, not highest by sort order.
+          latest=$(gh api 'repos/Swiftgram/TDLibKit/releases?per_page=20' \
+            --jq '[.[] | select(.draft == false)] | sort_by(.published_at) | last | .tag_name')
+          current=$(grep -A3 'Swiftgram/TDLibKit' Package.swift | sed -nE 's/.*exact: "([^"]+)".*/\1/p' | head -1)
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "Pinned: $current — newest: $latest"
+
+      - name: Move the pin
+        if: steps.versions.outputs.latest != steps.versions.outputs.current && steps.versions.outputs.latest != ''
+        run: |
+          old='${{ steps.versions.outputs.current }}'
+          new='${{ steps.versions.outputs.latest }}'
+          sed -i '' "s/$old/$new/g" Package.swift Tools/tdlib-probe/Package.swift
+          swift package update TDLibKit
+          (cd Tools/tdlib-probe && swift package update)
+
+      - name: Build and test against the new TDLib
+        if: steps.versions.outputs.latest != steps.versions.outputs.current && steps.versions.outputs.latest != ''
+        run: |
+          swift build -c release --product NodogramApp
+          swift test
+
+      - name: Open a pull request
+        if: steps.versions.outputs.latest != steps.versions.outputs.current && steps.versions.outputs.latest != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          new='${{ steps.versions.outputs.latest }}'
+          branch="tdlib/$new"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "A PR for $new already exists."; exit 0
+          fi
+          git config user.name "nodogram-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add Package.swift Package.resolved Tools/tdlib-probe/Package.swift Tools/tdlib-probe/Package.resolved
+          git commit -m "Update TDLibKit to $new"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "Update TDLib to $new" \
+            --body "Automated: TDLibKit \`${{ steps.versions.outputs.current }}\` → \`$new\`. Built and tested on macOS 15 before this PR was opened. Check Documentation/UPSTREAM.md if the TDLib version (not just the build hash) changed."
+          gh pr merge "$branch" --auto --squash || echo "Auto-merge is off for this repository; merge the PR by hand."

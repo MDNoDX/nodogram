@@ -38,6 +38,31 @@ enum MediaActions {
         }
     }
 
+    /// Asks where to put this one file.
+    static func saveAs(_ message: Message, model: AppModel) {
+        guard message.canBeSaved, let media = message.media else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = media.suggestedFileName
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        Task {
+            guard let file = await model.fetch(media.primaryFile, priority: 24), let path = file.localPath else {
+                model.showToast("Couldn't download the file.")
+                return
+            }
+            do {
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    try FileManager.default.removeItem(at: destination)
+                }
+                try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: destination)
+                Quarantine.mark(destination.path)
+                model.showToast("Saved “\(destination.lastPathComponent)”")
+            } catch {
+                model.showToast("Couldn't save: \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// Documents open in their default app; media plays inside Nodogram.
     static func openDocument(_ message: Message, file: MediaFile, model: AppModel) {
         guard message.canBeSaved else {
@@ -76,7 +101,8 @@ enum MediaActions {
             }
 
             if message.canBeSaved {
-                Button("Save to Downloads") { save(message, model: model, reveal: false) }
+                Button("Save to \(MediaLibrary.folder.lastPathComponent)") { save(message, model: model, reveal: false) }
+                Button("Save As…") { saveAs(message, model: model) }
                 Button("Show in Finder") { save(message, model: model, reveal: true) }
                 if case .photo = media {
                     Button("Copy Image") { copyImage(message, model: model) }
@@ -85,13 +111,6 @@ enum MediaActions {
                 Text("Saving is turned off in this chat")
             }
             Divider()
-        }
-        if !message.text.isEmpty {
-            Button("Copy Text") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(message.text, forType: .string)
-            }
-            .disabled(!message.canBeSaved && !message.isDeleted)
         }
     }
 }

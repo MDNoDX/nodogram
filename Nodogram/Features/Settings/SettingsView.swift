@@ -13,6 +13,8 @@ public struct SettingsView: View {
         TabView {
             StorageSettings()
                 .tabItem { Label("Storage", systemImage: "externaldrive") }
+            NotificationSettings()
+                .tabItem { Label("Notifications", systemImage: "bell.badge") }
             PrivacySettings()
                 .tabItem { Label("Privacy", systemImage: "hand.raised") }
             PlaybackSettings()
@@ -95,7 +97,7 @@ private struct StorageSettings: View {
 // MARK: - Privacy
 
 private struct PrivacySettings: View {
-    @AppStorage(AppModel.keepDeletedKey) private var keepDeleted = true
+    @AppStorage(AppModel.keepDeletedKey) private var keepDeleted = false
     @AppStorage(AppModel.deletedRetentionKey) private var retentionDays = 365
     @State private var stats: MessageArchive.Statistics?
     @State private var confirmingErase = false
@@ -127,8 +129,9 @@ private struct PrivacySettings: View {
                 Text("Deleted messages")
             } footer: {
                 Text("""
-                    Messages preserved here are stored locally on this Mac, encrypted with a key in your \
-                    Keychain. Anyone with access to this Mac account may be able to read them. This does \
+                    Off by default. Self-destructing, auto-deleting and copy-protected messages are never \
+                    kept, as Telegram's API terms require. Messages preserved here are stored locally on \
+                    this Mac, encrypted with a key in your Keychain. Anyone with access to this Mac account may be able to read them. This does \
                     not undo deletion on Telegram, and cannot recover messages this Mac never received — \
                     for example ones sent and deleted while Nodogram was closed.
                     """)
@@ -138,6 +141,7 @@ private struct PrivacySettings: View {
         }
         .formStyle(.grouped)
         .task { await refresh() }
+        .onChange(of: keepDeleted) { _, _ in Task { await refresh() } }
         .confirmationDialog("Keep deleted messages forever?", isPresented: $confirmingForever) {
             Button("Keep Forever") { retentionDays = 0 }
         } message: {
@@ -156,13 +160,51 @@ private struct PrivacySettings: View {
     }
 
     private func refresh() async {
-        guard let archive = try? Self.archive() else { return }
+        // Reading statistics needs the archive key; don't ask for it while off.
+        guard keepDeleted, let archive = try? Self.archive() else { stats = nil; return }
         stats = await archive.statistics()
     }
 
     private static func archive() throws -> MessageArchive {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return try MessageArchive.shared(directory: support.appendingPathComponent("Nodogram/accounts/default"))
+    }
+}
+
+// MARK: - Notifications
+
+private struct NotificationSettings: View {
+    @AppStorage(AppModel.notificationsEnabledKey) private var enabled = true
+    @AppStorage(SystemNotifications.privacyModeKey) private var privacyMode = false
+    @AppStorage(AppModel.dockBadgeKey) private var dockBadge = true
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Show notifications for new messages", isOn: $enabled)
+                Toggle("Hide message text and sender", isOn: $privacyMode)
+                    .disabled(!enabled)
+                Toggle("Show unread count on the Dock icon", isOn: $dockBadge)
+            } footer: {
+                Text("""
+                    Muted chats never notify, following your Telegram settings. With text hidden, \
+                    banners say only that a new message arrived — useful when sharing your screen.
+                    """)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Section {
+                Button("Open macOS Notification Settings…") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            } footer: {
+                Text("Banner style, sounds and Focus are controlled by macOS.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 
