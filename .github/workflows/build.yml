@@ -27,6 +27,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Use the newest Xcode on the runner, closest to what the app is
+      # developed with (Swift 6.3); older compilers mis-handle some code.
+      - name: Select Xcode
+        run: |
+          latest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$latest" ]; then sudo xcode-select -s "$latest"; fi
+
       - name: Show toolchain
         run: |
           swift --version
@@ -55,7 +62,14 @@ jobs:
       - name: Test
         # Includes integration tests against the real TDLib binary. They need
         # no Telegram account and make no network calls.
-        run: swift test
+        # Failing tests are also written as annotations, which anyone can
+        # read without signing in to view the full log.
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test.log || {
+            grep -E "✘|error:" test.log | head -40 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          }
 
       # The icon is generated from Tools/icon/make_icon.py (the .icns is not
       # committed), which needs Pillow.

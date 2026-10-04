@@ -36,6 +36,14 @@ public enum KeychainKey {
         return key
     }
 
+    /// A separate key for one purpose, derived from a master key with HKDF,
+    /// so several stores share one Keychain item — and one approval prompt —
+    /// without sharing a key.
+    public static func derive(from master: SymmetricKey, purpose: String) -> SymmetricKey {
+        HKDF<SHA256>.deriveKey(inputKeyMaterial: master, salt: Data("app.nodogram".utf8),
+                               info: Data(purpose.utf8), outputByteCount: 32)
+    }
+
     /// Deleting the key makes everything encrypted with it unreadable — the
     /// strongest form of erase available, since it does not depend on the
     /// file system actually discarding the old bytes.

@@ -145,4 +145,15 @@ struct MessageArchiveTests {
         await archive.eraseAll()
         #expect(await archive.editHistory(chatID: ChatID(1), messageID: MessageID(30)).isEmpty)
     }
+
+    @Test("Derived keys are stable per purpose and differ between purposes")
+    func derivedKeys() {
+        let master = SymmetricKey(size: .bits256)
+        let a1 = KeychainKey.derive(from: master, purpose: "message-archive")
+        let a2 = KeychainKey.derive(from: master, purpose: "message-archive")
+        let b = KeychainKey.derive(from: master, purpose: "other")
+        #expect(a1 == a2)
+        #expect(a1 != b)
+        #expect(a1 != master)
+    }
 }

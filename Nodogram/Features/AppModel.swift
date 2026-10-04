@@ -8,6 +8,7 @@
 //  @MainActor because everything it publishes drives SwiftUI directly. The
 //  gateway it calls into is Sendable-by-contract, so crossing into it is safe.
 
+import CryptoKit
 import Foundation
 import Observation
 import OSLog
@@ -31,6 +32,9 @@ public final class AppModel {
         case needsCredentials(detail: String?)
         case authenticating(AuthorizationState)
         case ready
+        /// The Keychain would not hand over the database key. Nothing is
+        /// lost; the user approves access and tries again.
+        case storageLocked(detail: String)
     }
 
     // MARK: Session
@@ -166,6 +170,8 @@ public final class AppModel {
     /// target, so the chat's default "latest page" load does not replace it.
     var pendingJumpID: MessageID?
     var archiveDirectory: URL?
+    /// The one Keychain-held key; TDLib's and the archive's keys derive from it.
+    var masterKey: SymmetricKey?
     /// Who started typing to the user, when, and whether they sent anything.
     public internal(set) var typingLog: [TypingEvent] = TypingEvent.loadAll()
     public internal(set) var unseenTypingCount = 0
@@ -256,6 +262,7 @@ public final class AppModel {
 
         do {
             let directories = try Self.accountDirectories()
+            guard loadMasterKey() else { return }
             openArchive(in: directories.root)
             try await initializeEncrypted(gateway, credentials: credentials, directories: directories)
             connectNotifications()
@@ -266,6 +273,11 @@ public final class AppModel {
             if let state = try await gateway.currentAuthorizationState() {
                 applyAuthorizationState(state)
             }
+        } catch DomainError.notAuthorized where masterKey != nil
+                    && UserDefaults.standard.bool(forKey: "tdlib.databaseEncrypted.default") {
+            // TDLib's answer to a database key that doesn't match. The session
+            // is intact; never present this as "signed out".
+            phase = .storageLocked(detail: "The database key from the Keychain doesn't match the saved session.")
         } catch let error as DomainError {
             // `.notInitialized` is transient, not a failure to show.
             if error != .notInitialized {
@@ -388,6 +400,9 @@ public final class AppModel {
     }
 
     private func applyAuthorizationState(_ state: AuthorizationState) {
+        // A locked key leaves TDLib waiting for parameters; that is not a
+        // sign-out, so keep the explanation on screen until "Try Again".
+        if case .storageLocked = phase, state != .ready { return }
         switch state {
         case .ready:
             phase = .ready
@@ -644,8 +659,18 @@ public final class AppModel {
             }
             return
         }
+        guard let master = masterKey else { return }
+        // Archives made before the key was derived from the master key cannot
+        // be read with it; they held at most a few hours, and are cleared once.
+        if !UserDefaults.standard.bool(forKey: "archive.derivedKey.v1") {
+            UserDefaults.standard.set(true, forKey: "archive.derivedKey.v1")
+            for suffix in ["", "-wal", "-shm"] {
+                try? FileManager.default.removeItem(at: directory.appendingPathComponent("archive.sqlite" + suffix))
+            }
+        }
         do {
-            let archive = try MessageArchive.shared(directory: directory)
+            let archive = try MessageArchive.shared(directory: directory,
+                                                    key: KeychainKey.derive(from: master, purpose: "message-archive"))
             self.archive = archive
             // One-time: archives made before the compliance fix may hold
             // self-destructing or protected content. They cannot be told apart
@@ -935,19 +960,34 @@ public final class AppModel {
     /// and only after TDLib confirms success is that recorded — so a failure
     /// at any step leaves a working (if unencrypted) database rather than a
     /// locked-out user.
+    /// Reads the master key once per launch. Returns false — and shows why —
+    /// when the session database is encrypted and the key cannot be read:
+    /// opening it without the key would look like a sign-out.
+    private func loadMasterKey() -> Bool {
+        if masterKey != nil { return true }
+        do {
+            masterKey = try KeychainKey.loadOrCreate(service: "app.nodogram.tdlib", account: "default")
+            return true
+        } catch {
+            log.error("master key unavailable: \(String(describing: error), privacy: .public)")
+            if UserDefaults.standard.bool(forKey: "tdlib.databaseEncrypted.default") {
+                phase = .storageLocked(detail: "Nodogram couldn't read its key from the Keychain (\(error)).")
+                return false
+            }
+            // Never encrypted yet: carry on unencrypted, as before.
+            return true
+        }
+    }
+
     private func initializeEncrypted(_ gateway: TelegramGateway, credentials: TelegramCredentials,
                                      directories: AccountDirectories) async throws {
         let migratedKey = "tdlib.databaseEncrypted.default"
-        let key: Data
-        do {
-            key = try KeychainKey.loadOrCreate(service: "app.nodogram.tdlib", account: "default")
-                .withUnsafeBytes { Data($0) }
-        } catch {
-            log.error("tdlib key unavailable, staying unencrypted: \(String(describing: error), privacy: .public)")
+        guard let master = masterKey else {
             try await gateway.initialize(credentials: credentials, databaseDirectory: directories.database,
                                          filesDirectory: directories.files)
             return
         }
+        let key = master.withUnsafeBytes { Data($0) }
 
         let hasDatabase = FileManager.default.fileExists(atPath: directories.database.appendingPathComponent("db.sqlite").path)
         if UserDefaults.standard.bool(forKey: migratedKey) || !hasDatabase {

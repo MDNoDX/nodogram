@@ -31,6 +31,28 @@ public struct MainWindowView: View {
                     Task { await model.start() }
                 }
 
+            case .storageLocked(let detail):
+                VStack(spacing: 14) {
+                    Image(systemName: "lock.shield")
+                        .font(.system(size: 40))
+                        .foregroundStyle(Theme.accent)
+                    Text("Nodogram needs Keychain access").font(.title2.weight(.semibold))
+                    Text("""
+                        Your chats are safe on this Mac — they are encrypted with a key kept in your Keychain, \
+                        and Nodogram couldn't read it just now. Click Try Again; when macOS asks, enter your \
+                        login password and choose “Always Allow”.
+                        """)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: 440)
+                    Text(detail).font(.system(size: 11)).foregroundStyle(.tertiary).frame(maxWidth: 440)
+                    Button("Try Again") { Task { await model.start() } }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                }
+                .padding(40)
+                .frame(minWidth: 560, minHeight: 380)
+
             case .authenticating(let state):
                 AuthenticationView(
                     state: state,

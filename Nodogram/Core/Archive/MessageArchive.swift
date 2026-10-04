@@ -44,11 +44,10 @@ public actor MessageArchive {
 
     /// One archive per file per process: two SQLite connections writing the
     /// same file independently invite "database is locked" errors.
-    public static func shared(directory: URL) throws -> MessageArchive {
+    public static func shared(directory: URL, key: SymmetricKey) throws -> MessageArchive {
         let path = directory.appendingPathComponent("archive.sqlite").path
         registryLock.lock(); defer { registryLock.unlock() }
         if let existing = registry[path] { return existing }
-        let key = try KeychainKey.loadOrCreate(service: "app.nodogram.archive", account: directory.lastPathComponent)
         let archive = try MessageArchive(path: path, key: key)
         registry[path] = archive
         return archive
