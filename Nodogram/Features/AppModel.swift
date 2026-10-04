@@ -170,6 +170,9 @@ public final class AppModel {
     /// target, so the chat's default "latest page" load does not replace it.
     var pendingJumpID: MessageID?
     var archiveDirectory: URL?
+    /// Messages the user deleted from this Mac ("chat-message"); their
+    /// deletion is the user's own and leaves nothing behind.
+    var selfDeletedKeys: Set<String> = []
     /// The one Keychain-held key; TDLib's and the archive's keys derive from it.
     var masterKey: SymmetricKey?
     /// Who started typing to the user, when, and whether they sent anything.
@@ -714,17 +717,27 @@ public final class AppModel {
             if chatID == selectedChatID { messages.removeAll { removed.contains($0.id) } }
             return
         }
+        // Deletions the user made here, or of their own messages anywhere,
+        // are theirs: those messages simply go.
+        let mine = Set(ids.filter { selfDeletedKeys.remove("\(chatID.rawValue)-\($0.rawValue)") != nil })
         Task { [weak self] in
-            let archived = await archive.markDeleted(chatID: chatID, messageIDs: ids)
+            await archive.forget(chatID: chatID, messageIDs: Array(mine))
+            let candidates = ids.filter { !mine.contains($0) }
+            let marked = await archive.markDeleted(chatID: chatID, messageIDs: candidates)
+            let ownCopies = marked.filter(\.isOutgoing).map(\.id)
+            await archive.forget(chatID: chatID, messageIDs: ownCopies)
+            let archived = marked.filter { !$0.isOutgoing }
             guard let self else { return }
-            self.announceDeleted(archived.filter { !$0.isOutgoing && !$0.isService }, in: chatID)
+            self.announceDeleted(archived.filter { !$0.isService }, in: chatID)
             guard chatID == self.selectedChatID else { return }
             let byID = Dictionary(uniqueKeysWithValues: archived.map { ($0.id, $0) })
             self.messages = self.messages.compactMap { message in
                 guard removed.contains(message.id) else { return message }
                 guard var copy = byID[message.id] else { return nil }
-                // Keep live-only details the archive does not store.
-                copy.media = nil
+                // Keep the media the chat was already showing: a photo seen
+                // before deletion stays visible (from cache or its preview).
+                copy.media = message.media
+                copy.albumID = 0
                 return copy
             }
         }

@@ -121,6 +121,22 @@ public actor MessageArchive {
         }
     }
 
+    /// Drops messages entirely — used when the user deleted them themselves,
+    /// which must not leave a "Deleted" copy behind.
+    public func forget(chatID: ChatID, messageIDs: [MessageID]) {
+        guard !messageIDs.isEmpty else { return }
+        let ids = messageIDs.map(\.rawValue)
+        let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
+        var arguments: [DatabaseValueConvertible] = [chatID.rawValue]
+        arguments.append(contentsOf: ids)
+        try? database.write { db in
+            try db.execute(sql: "DELETE FROM archived_message WHERE chat_id = ? AND message_id IN (\(placeholders))",
+                           arguments: StatementArguments(arguments))
+            try db.execute(sql: "DELETE FROM message_edit WHERE chat_id = ? AND message_id IN (\(placeholders))",
+                           arguments: StatementArguments(arguments))
+        }
+    }
+
     // MARK: - Edit history
 
     /// Records a new version of a message's text. The original stays in

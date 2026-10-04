@@ -130,6 +130,13 @@ if [ -n "$TEAM_ID" ]; then
   codesign --force --deep --options runtime --timestamp \
            --sign "Developer ID Application" "$APP" 2>/dev/null \
     || codesign --force --deep --sign - "$APP"
+elif security find-identity -v -p codesigning 2>/dev/null | grep -q '"Nodogram Local"'; then
+  # A self-signed "Nodogram Local" certificate (Keychain Access → Certificate
+  # Assistant → Create a Certificate…, type Code Signing) gives every build the
+  # same certificate-backed identity, so the Keychain's "Always Allow" sticks
+  # across rebuilds. See README → "Stop the Keychain prompts".
+  say "Signing with the local certificate \"Nodogram Local\""
+  codesign --force --deep --sign "Nodogram Local" "$APP"
 else
   # Ad-hoc signing, with an explicit designated requirement.
   #

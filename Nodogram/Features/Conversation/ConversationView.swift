@@ -770,7 +770,7 @@ struct MessageBubble: View {
                     isOutgoing: message.isOutgoing,
                     onVote: { model.vote($0, in: message) },
                     onRetract: { model.retractVote(in: message) })
-            } else if message.isDeleted, let label = message.attachmentLabel {
+            } else if message.isDeleted, message.media == nil, let label = message.attachmentLabel {
                 Label(label, systemImage: label == "Poll" || label == "Quiz" ? "chart.bar" : "paperclip")
                     .font(.system(size: 12.5))
                     .foregroundStyle(.secondary)

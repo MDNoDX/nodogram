@@ -108,7 +108,7 @@ extension AppModel {
 
     func noteTyping(chatID: ChatID, user: UserID, activity: ChatActivity?) {
         let scope = TrackerSettings.typingScope
-        guard scope != "off", let chat = chatsByID[chatID], user != myUserID else { return }
+        guard scope != "off", let chat = chatsByID[chatID], user != myUserID, !chat.isBot else { return }
         let isGroup: Bool
         switch chat.kind {
         case .privateChat, .secret: isGroup = false

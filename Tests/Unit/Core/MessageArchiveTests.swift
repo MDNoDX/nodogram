@@ -156,4 +156,14 @@ struct MessageArchiveTests {
         #expect(a1 != b)
         #expect(a1 != master)
     }
+
+    @Test("Forgetting removes a message and its history without a trace")
+    func forget() async throws {
+        let (archive, _) = try makeArchive()
+        await archive.record([message(40, "mine")])
+        await archive.recordEdit(chatID: ChatID(1), messageID: MessageID(40), text: "mine, edited")
+        await archive.forget(chatID: ChatID(1), messageIDs: [MessageID(40)])
+        #expect(await archive.markDeleted(chatID: ChatID(1), messageIDs: [MessageID(40)]).isEmpty)
+        #expect(await archive.editHistory(chatID: ChatID(1), messageID: MessageID(40)).isEmpty)
+    }
 }

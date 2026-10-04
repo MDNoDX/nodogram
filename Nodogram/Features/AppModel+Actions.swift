@@ -120,6 +120,7 @@ extension AppModel {
 
     public func delete(_ messages: [Message], forEveryone: Bool) {
         guard let gateway, let chatID = messages.first?.chatID else { return }
+        for message in messages { selfDeletedKeys.insert("\(chatID.rawValue)-\(message.id.rawValue)") }
         Task { [weak self] in
             do {
                 try await gateway.deleteMessages(messages.map(\.id), in: chatID, forEveryone: forEveryone)

@@ -120,6 +120,19 @@ PRODUCT_BUNDLE_IDENTIFIER = com.yourcompany.nodogram
 Signing is only required to run a bundled `.app` (notifications, Keychain,
 sandbox entitlements). It is not needed to build and test the core libraries.
 
+#### Stop the Keychain prompts (no Apple account needed)
+
+Without a Team ID, each rebuild has a new code hash and macOS asks for your
+login password again before Nodogram can read its database key. Create a free
+local certificate once and every build keeps the same identity:
+
+1. Open **Keychain Access** → menu **Keychain Access → Certificate Assistant →
+   Create a Certificate…**
+2. Name: `Nodogram Local` · Identity Type: **Self-Signed Root** · Certificate
+   Type: **Code Signing** → Create.
+3. Rebuild with `./Tools/build-app.sh`; it finds the certificate by name. Choose
+   **Always Allow** at the next Keychain prompt — it is the last one.
+
 ### 3. Build and run
 
 ```bash
