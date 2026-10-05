@@ -64,13 +64,22 @@ enum ContentKind: String {
     }
 }
 
-private struct ContentBrowser: View {
+struct ContentBrowser: View {
     let model: AppModel
     let kind: ContentKind
 
     enum Scope: Hashable { case everywhere, chat(ChatID) }
 
-    @State private var scope: Scope = .everywhere
+    @State private var scope: Scope
+    /// Shown inside a chat's info panel: no scope picker, that chat only.
+    private let isEmbedded: Bool
+
+    init(model: AppModel, kind: ContentKind, chat: ChatID? = nil) {
+        self.model = model
+        self.kind = kind
+        self._scope = State(initialValue: chat.map { .chat($0) } ?? .everywhere)
+        self.isEmbedded = chat != nil
+    }
     @State private var items: [Message] = []
     @State private var isLoading = false
     @State private var query = ""
@@ -87,8 +96,10 @@ private struct ContentBrowser: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
+            if !isEmbedded {
+                header
+                Divider()
+            }
             Group {
                 if isLoading, items.isEmpty {
                     ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)

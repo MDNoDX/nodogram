@@ -69,6 +69,8 @@ public enum TelegramEvent: Sendable {
     /// The user's chat folders, in order. `mainPosition` is where "All Chats"
     /// sits among them.
     case foldersChanged([ChatFolderSummary], mainPosition: Int)
+    /// A user's name and usernames as just received, for name-history tracking.
+    case userIdentity(UserID, UserIdentity)
 }
 
 /// Which of Telegram's chat lists to load.

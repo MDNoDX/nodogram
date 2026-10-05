@@ -8,6 +8,7 @@
 //  system accent colour is a single switch rather than a sweep.
 
 import SwiftUI
+import AppKit
 
 public enum Theme {
     /// Accent choices offered in Settings → Appearance. The first is
@@ -27,6 +28,10 @@ public enum Theme {
     public static let textSizeKey = "appearance.textSize"
     public static let wallpaperKey = "appearance.wallpaper"
     public static let colorSchemeKey = "appearance.colorScheme"   // "system" | "light" | "dark"
+    public static let solidBubblesKey = "appearance.solidBubbles"
+
+    /// Outgoing bubbles filled with the accent, white text — Telegram's look.
+    public static var solidBubbles: Bool { UserDefaults.standard.bool(forKey: solidBubblesKey) }
 
     /// The accent the user chose. Read on every access, so a change applies
     /// as soon as views redraw.
@@ -42,6 +47,26 @@ public enum Theme {
     public static var messageSize: CGFloat {
         let value = UserDefaults.standard.double(forKey: textSizeKey)
         return value >= 11 && value <= 20 ? value : 13.5
+    }
+
+    /// The index meaning "the user's own picture" (Settings → Appearance).
+    public static let customWallpaperIndex = 99
+
+    public static var customWallpaperURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Nodogram/wallpaper.jpg")
+    }
+
+    nonisolated(unsafe) private static var cachedWallpaper: (date: Date, image: NSImage)?
+
+    /// The custom wallpaper, decoded once and reused until the file changes.
+    public static var customWallpaperImage: NSImage? {
+        let url = customWallpaperURL
+        guard let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate else { return nil }
+        if let cached = cachedWallpaper, cached.date == modified { return cached.image }
+        guard let image = NSImage(contentsOf: url) else { return nil }
+        cachedWallpaper = (modified, image)
+        return image
     }
 
     /// Chat background presets: none, then soft gradients.

@@ -15,6 +15,7 @@ public struct MainWindowView: View {
     @AppStorage(Theme.colorSchemeKey) private var colorScheme = "system"
     @AppStorage(Theme.accentKey) private var accentIndex = 0
     @AppStorage(Theme.textSizeKey) private var textSize = 13.5
+    @AppStorage(Theme.solidBubblesKey) private var solidBubbles = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var confirmingSignOut = false
 
@@ -86,7 +87,7 @@ public struct MainWindowView: View {
                     .animation(.easeOut(duration: 0.12), value: model.isPaletteVisible)
                     .focusedSceneValue(\.appModel, model)
                     // Appearance changes redraw everything with the new tokens.
-                    .id("appearance-\(accentIndex)-\(textSize)")
+                    .id("appearance-\(accentIndex)-\(textSize)-\(solidBubbles)")
             }
         }
         .tint(Theme.accent)

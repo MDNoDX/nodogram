@@ -16,46 +16,47 @@ struct ProfilePage: View {
     @State private var error: String?
 
     var body: some View {
-        SettingsForm {
-            if let edited {
-                Section {
-                    HStack(spacing: 14) {
-                        let chat = model.chatsByID[ChatID(edited.userID.rawValue)]
-                        Avatar(title: edited.displayName, seed: edited.userID.rawValue, size: 72,
-                               imagePath: chat?.avatarPath, thumbnail: chat?.avatarThumbnail)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(edited.displayName).font(.system(size: 18, weight: .semibold))
-                            Text(SettingsListView.formatPhone(edited.phoneNumber)).foregroundStyle(.secondary)
-                            Text("online").font(.system(size: 12)).foregroundStyle(Theme.accent)
+        ScrollView {
+            VStack(spacing: 16) {
+                if let edited {
+                    header(edited)
+                    card {
+                        field("First name (required)", text: binding(\.firstName))
+                        Divider()
+                        field("Last name (optional)", text: binding(\.lastName))
+                    }
+                    caption("Your name as everyone sees it.")
+                    card {
+                        TextField("", text: binding(\.bio), prompt: Text("Bio"), axis: .vertical)
+                            .textFieldStyle(.plain).font(.system(size: 13.5)).lineLimit(1...4)
+                        HStack {
+                            Spacer()
+                            Text("\(70 - edited.bio.count)").font(.system(size: 11).monospacedDigit())
+                                .foregroundStyle(edited.bio.count > 70 ? Theme.failure : .secondary)
                         }
                     }
-                    .padding(.vertical, 6)
-                }
-                Section("Name") {
-                    TextField("First name", text: binding(\.firstName))
-                    TextField("Last name", text: binding(\.lastName))
-                }
-                Section {
-                    TextField("Bio", text: binding(\.bio), axis: .vertical)
-                        .lineLimit(2...4)
-                    HStack {
-                        Spacer()
-                        Text("\(70 - edited.bio.count)")
-                            .font(.system(size: 11).monospacedDigit())
-                            .foregroundStyle(edited.bio.count > 70 ? Theme.failure : .secondary)
+                    caption("Any details such as age, occupation or city. Example: 23 y.o. designer from Tashkent.")
+                    card {
+                        HStack(spacing: 2) {
+                            Text("@").foregroundStyle(.secondary)
+                            TextField("", text: binding(\.username), prompt: Text("username")).textFieldStyle(.plain)
+                        }
+                        .font(.system(size: 13.5))
+                        if !edited.username.isEmpty {
+                            Divider()
+                            copyRow("t.me/\(edited.username)", copy: "https://t.me/\(edited.username)", accent: true)
+                        }
                     }
-                } header: { Text("Bio") } footer: {
-                    SettingsNote("A few words about yourself. Anyone who opens your profile can see it.")
-                }
-                Section {
-                    TextField("Username", text: binding(\.username))
-                } header: { Text("Username") } footer: {
-                    SettingsNote("People can find you by this name and write to you without knowing your number. 5–32 characters: a–z, 0–9 and underscores.")
-                }
-                if let error {
-                    Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.failure) }
-                }
-                Section {
+                    caption("People can find you by this name and message you without your number. 5–32 characters: a–z, 0–9, underscores.")
+                    card {
+                        copyRow(SettingsListView.formatPhone(edited.phoneNumber), copy: "+" + edited.phoneNumber, label: "mobile")
+                        Divider()
+                        copyRow(String(edited.userID.rawValue), copy: String(edited.userID.rawValue), label: "your ID")
+                    }
+                    if let error {
+                        Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.failure)
+                            .font(.system(size: 12))
+                    }
                     HStack {
                         Spacer()
                         Button("Revert") { self.edited = original; error = nil }
@@ -63,12 +64,16 @@ struct ProfilePage: View {
                         Button(isSaving ? "Saving…" : "Save") { save() }
                             .keyboardShortcut("s", modifiers: .command)
                             .buttonStyle(.borderedProminent)
-                            .disabled(edited == original || isSaving || edited.bio.count > 70)
+                            .disabled(edited == original || isSaving || edited.bio.count > 70
+                                      || edited.firstName.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
+                } else {
+                    ProgressView().controlSize(.small).padding(40)
                 }
-            } else {
-                Section { HStack { Spacer(); ProgressView().controlSize(.small); Spacer() } }
             }
+            .padding(24)
+            .frame(maxWidth: 560)
+            .frame(maxWidth: .infinity)
         }
         .task {
             original = await model.loadProfile()
@@ -76,8 +81,76 @@ struct ProfilePage: View {
         }
     }
 
+    private func header(_ p: ProfileInfo) -> some View {
+        VStack(spacing: 8) {
+            let chat = model.chatsByID[ChatID(p.userID.rawValue)]
+            Avatar(title: p.displayName, seed: p.userID.rawValue, size: 104,
+                   imagePath: chat?.avatarPath, thumbnail: chat?.avatarThumbnail)
+                .overlay(alignment: .bottomTrailing) {
+                    Button(action: choosePhoto) {
+                        Image(systemName: "camera.fill").font(.system(size: 12)).foregroundStyle(.white)
+                            .frame(width: 30, height: 30).background(Theme.accent, in: Circle())
+                            .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 3))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Set New Photo")
+                }
+            HStack(spacing: 5) {
+                Text(p.displayName).font(.system(size: 20, weight: .semibold))
+                if p.isPremium { Image(systemName: "star.fill").foregroundStyle(.purple) }
+            }
+            Text("online").font(.system(size: 12.5)).foregroundStyle(Theme.accent)
+            Button("Set New Photo…", action: choosePhoto).buttonStyle(.link).font(.system(size: 12.5))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.bottom, 4)
+    }
+
+    private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) { content() }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func caption(_ text: String) -> some View {
+        Text(text).font(.system(size: 11.5)).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.top, -8)
+    }
+
+    private func field(_ prompt: String, text: Binding<String>) -> some View {
+        TextField("", text: text, prompt: Text(prompt)).textFieldStyle(.plain).font(.system(size: 13.5))
+    }
+
+    private func copyRow(_ value: String, copy: String, label: String? = nil, accent: Bool = false) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value).font(.system(size: 13.5)).foregroundStyle(accent ? Theme.accent : .primary)
+                if let label { Text(label).font(.system(size: 11)).foregroundStyle(.secondary) }
+            }
+            Spacer()
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(copy, forType: .string)
+                model.showToast("Copied")
+            } label: { Image(systemName: "doc.on.doc") }
+                .buttonStyle(.borderless).help("Copy")
+        }
+    }
+
     private func binding(_ path: WritableKeyPath<ProfileInfo, String>) -> Binding<String> {
         Binding(get: { edited?[keyPath: path] ?? "" }, set: { edited?[keyPath: path] = $0 })
+    }
+
+    private func choosePhoto() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.prompt = "Set Photo"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            error = await model.setProfilePhoto(path: url.path)
+            if error == nil { model.showToast("Profile photo updated") }
+        }
     }
 
     private func save() {

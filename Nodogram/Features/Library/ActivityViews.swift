@@ -215,19 +215,23 @@ struct MyActivityView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            VStack(spacing: 8) {
+                SearchField(text: $query, prompt: "Search groups, channels and people")
                 Picker("", selection: $filter) {
                     Text("All").tag(0)
                     Text("Groups").tag(1)
                     Text("Channels").tag(2)
                     Text("I run").tag(3)
+                    Text("Left").tag(4)
+                    Text("Saved me").tag(5)
                 }
                 .pickerStyle(.segmented).labelsHidden()
-                TextField("Search", text: $query).textFieldStyle(.roundedBorder).frame(maxWidth: 120)
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             Divider()
-            if visible.isEmpty {
+            if filter == 5 {
+                MutualContactsList(model: model, query: query)
+            } else if visible.isEmpty {
                 EmptyStateView(icon: "person.2", title: "No groups here",
                                message: "Groups and channels you are in appear here once your chat list has loaded.")
             } else {
@@ -275,9 +279,11 @@ struct MyActivityView: View {
     private var visible: [GroupSummary] {
         groups.filter { group in
             switch filter {
-            case 1: if group.isChannel { return false }
-            case 2: if !group.isChannel { return false }
-            case 3: if group.role == .member { return false }
+            case 0: if group.role == .left { return false }
+            case 1: if group.isChannel || group.role == .left { return false }
+            case 2: if !group.isChannel || group.role == .left { return false }
+            case 3: if group.role == .member || group.role == .left { return false }
+            case 4: if group.role != .left { return false }
             default: break
             }
             return query.isEmpty || group.title.localizedCaseInsensitiveContains(query)
@@ -295,6 +301,57 @@ struct MyActivityView: View {
                 .padding(.horizontal, 5).padding(.vertical, 1).background(Theme.accent, in: Capsule())
         case .member:
             EmptyView()
+        case .left:
+            Text("Left").font(.system(size: 9.5, weight: .bold)).foregroundStyle(.white)
+                .padding(.horizontal, 5).padding(.vertical, 1).background(Color.gray, in: Capsule())
+        }
+    }
+}
+
+/// People who saved you in their contacts — as far as Telegram reveals it:
+/// only those you have saved too ("mutual contacts").
+private struct MutualContactsList: View {
+    let model: AppModel
+    let query: String
+    @State private var people: [UserID] = []
+    @State private var loaded = false
+
+    var body: some View {
+        let visible = people.filter { query.isEmpty || model.chatTitle(ChatID($0.rawValue)).localizedCaseInsensitiveContains(query) }
+        Group {
+            if !loaded {
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    Section {
+                        ForEach(visible, id: \.self) { user in
+                            let chat = model.chatsByID[ChatID(user.rawValue)]
+                            HStack(spacing: 10) {
+                                Avatar(title: chat?.title ?? model.chatTitle(ChatID(user.rawValue)), seed: user.rawValue, size: 32,
+                                       imagePath: chat?.avatarPath, thumbnail: chat?.avatarThumbnail)
+                                Text(chat?.title ?? model.chatTitle(ChatID(user.rawValue))).font(.system(size: 13))
+                                Spacer()
+                                Image(systemName: "arrow.left.arrow.right").font(.system(size: 10)).foregroundStyle(Theme.success)
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                model.selectedDestination = .allChats
+                                model.select(ChatID(user.rawValue))
+                            }
+                        }
+                    } header: {
+                        Text("\(people.count) people have you in their contacts")
+                    } footer: {
+                        Text("Telegram tells you only about people you have saved too. Nobody — no app or bot — can list strangers who saved your number, or who opened your profile.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                }
+                .listStyle(.inset)
+            }
+        }
+        .task {
+            people = await model.mutualContacts()
+            loaded = true
         }
     }
 }

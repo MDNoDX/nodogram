@@ -108,4 +108,9 @@ extension AppModel {
         do { try await gateway?.removeMember(member.userID, from: chat, ban: ban); return nil }
         catch { return error.userFacingDescription }
     }
+
+    public func setProfilePhoto(path: String) async -> String? {
+        do { try await gateway?.setProfilePhoto(path: path); return nil }
+        catch { return error.userFacingDescription }
+    }
 }

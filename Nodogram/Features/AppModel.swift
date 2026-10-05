@@ -194,6 +194,13 @@ public final class AppModel {
     var typingNotifiedAt: [ChatID: Date] = [:]
     var typingSweepTask: Task<Void, Never>?
     var vaultTask: Task<Void, Never>?
+    let userHistory = UserHistoryStore()
+    /// The profile panel on the right of a conversation.
+    public var infoPanelVisible = false
+    /// Bumped when a chat's wallpaper changes, so the timeline redraws.
+    public internal(set) var chatWallpaperVersion = 0
+    /// Messages gathered so far while exporting a chat; nil when idle.
+    public internal(set) var exportProgress: Int?
     /// Nodogram Vault's state, when it runs on this Mac.
     public internal(set) var vaultStatus: VaultStatus?
     var presenceObservers: [any NSObjectProtocol] = []
@@ -379,6 +386,9 @@ public final class AppModel {
 
         case .notificationsRemoved(let groupID, let ids):
             SystemNotifications.shared.remove(groupID: groupID, ids: ids)
+
+        case .userIdentity(let user, let identity):
+            noteIdentity(user, identity)
 
         case .foldersChanged(let folders, _):
             self.folders = folders

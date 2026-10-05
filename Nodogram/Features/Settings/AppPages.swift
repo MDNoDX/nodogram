@@ -127,81 +127,207 @@ struct AppearancePage: View {
     @AppStorage(Theme.accentKey) private var accent = 0
     @AppStorage(Theme.textSizeKey) private var textSize = 13.5
     @AppStorage(Theme.wallpaperKey) private var wallpaper = 0
+    @AppStorage(Theme.solidBubblesKey) private var solidBubbles = false
     @AppStorage("chatList.showFolderTags") private var folderTags = false
+    @AppStorage("general.largeEmoji") private var largeEmoji = true
+
+    /// Ready-made looks, as in Telegram's Appearance: each sets the scheme,
+    /// accent, bubbles and background together.
+    private struct Preset: Identifiable {
+        let id: String
+        let scheme: String
+        let accent: Int
+        let solid: Bool
+        let wallpaper: Int
+    }
+
+    private let presets: [Preset] = [
+        Preset(id: "Day", scheme: "light", accent: 1, solid: true, wallpaper: 0),
+        Preset(id: "Day Classic", scheme: "light", accent: 3, solid: false, wallpaper: 3),
+        Preset(id: "Night", scheme: "dark", accent: 0, solid: false, wallpaper: 0),
+        Preset(id: "Night Accent", scheme: "dark", accent: 1, solid: true, wallpaper: 5),
+        Preset(id: "System", scheme: "system", accent: 0, solid: false, wallpaper: 0),
+    ]
 
     var body: some View {
         SettingsForm {
-            Section("Theme") {
-                Picker("Appearance", selection: $scheme) {
-                    Text("System").tag("system")
-                    Text("Light").tag("light")
-                    Text("Dark").tag("dark")
+            Section { preview.listRowInsets(EdgeInsets()) }
+
+            Section("Colour theme") {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(presets) { preset in presetCard(preset) }
+                    }
+                    .padding(.vertical, 4)
                 }
-                .pickerStyle(.segmented)
-            }
-            Section("Accent colour") {
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     ForEach(Theme.accentChoices.indices, id: \.self) { index in
                         Button { accent = index } label: {
                             Circle().fill(Theme.accentChoices[index].color)
-                                .frame(width: 26, height: 26)
+                                .frame(width: 28, height: 28)
                                 .overlay { if accent == index { Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.white) } }
-                                .overlay(Circle().stroke(.primary.opacity(accent == index ? 0.5 : 0), lineWidth: 2).padding(-3))
+                                .overlay(Circle().stroke(Theme.accentChoices[index].color, lineWidth: accent == index ? 2 : 0).padding(-4))
                         }
                         .buttonStyle(.plain)
                         .help(Theme.accentChoices[index].name)
                     }
                 }
                 .padding(.vertical, 4)
-            }
-            Section("Messages") {
-                HStack {
-                    Text("Text size")
-                    Slider(value: $textSize, in: 12...18, step: 0.5)
-                    Text("\(textSize, specifier: "%.1f") pt").monospacedDigit().foregroundStyle(.secondary).frame(width: 52)
+                Toggle("Dark Mode", isOn: Binding(get: { scheme == "dark" }, set: { scheme = $0 ? "dark" : "light" }))
+                Toggle("Coloured outgoing bubbles", isOn: $solidBubbles)
+                Picker("Auto-Night Mode", selection: $scheme) {
+                    Text("Follow System").tag("system")
+                    Text("Always Light").tag("light")
+                    Text("Always Dark").tag("dark")
                 }
-                preview
             }
-            Section("Chat background") {
-                HStack(spacing: 10) {
-                    ForEach(Theme.wallpapers.indices, id: \.self) { index in
-                        Button { wallpaper = index } label: {
+
+            Section("Chat wallpaper") {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(Theme.wallpapers.indices, id: \.self) { index in
+                            wallpaperSwatch(index)
+                        }
+                        Button(action: chooseWallpaper) {
                             VStack(spacing: 4) {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Theme.wallpapers[index].colors.isEmpty
-                                          ? AnyShapeStyle(Color.secondary.opacity(0.08))
-                                          : AnyShapeStyle(LinearGradient(colors: Theme.wallpapers[index].colors.map { $0.opacity(4) },
-                                                                         startPoint: .topLeading, endPoint: .bottomTrailing)))
-                                    .frame(width: 58, height: 42)
-                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accent, lineWidth: wallpaper == index ? 2 : 0))
-                                Text(Theme.wallpapers[index].name).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                                Group {
+                                    if wallpaper == Theme.customWallpaperIndex, let image = Theme.customWallpaperImage {
+                                        Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                                    } else {
+                                        Image(systemName: "photo.badge.plus").font(.system(size: 18)).foregroundStyle(.secondary)
+                                    }
+                                }
+                                .frame(width: 62, height: 46)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accent, lineWidth: wallpaper == Theme.customWallpaperIndex ? 2 : 0))
+                                Text("Picture…").font(.system(size: 10.5)).foregroundStyle(.secondary)
                             }
                         }
                         .buttonStyle(.plain)
                     }
+                    .padding(.vertical, 4)
+                }
+                Text("Any chat can have its own: ⋯ → Change Wallpaper.").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+
+            Section("Text size") {
+                HStack(spacing: 10) {
+                    Text("A").font(.system(size: 11))
+                    Slider(value: $textSize, in: 12...18, step: 0.5)
+                    Text("A").font(.system(size: 18))
+                    Text("\(textSize, specifier: "%.1f")").monospacedDigit().foregroundStyle(.secondary).frame(width: 34)
                 }
             }
+
             Section {
                 Toggle("Show folder tags in the chat list", isOn: $folderTags)
-            } header: { Text("Chat list") } footer: {
-                SettingsNote("Each chat shows the names of the folders it belongs to.")
-            }
+                Toggle("Large emoji in messages that are only emoji", isOn: $largeEmoji)
+            } header: { Text("Chat list and messages") }
         }
     }
 
     private var preview: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Assalomu alaykum! Qalaysiz?")
-                .font(.system(size: textSize))
-                .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(Theme.bubbleIncoming, in: RoundedRectangle(cornerRadius: 14))
-            Text("Yaxshi, rahmat! Bugun uchrashamizmi?")
-                .font(.system(size: textSize))
-                .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(Theme.accentChoices[accent].color.opacity(0.17), in: RoundedRectangle(cornerRadius: 14))
-                .frame(maxWidth: .infinity, alignment: .trailing)
+        let colors = wallpaper == Theme.customWallpaperIndex ? [] : Theme.wallpapers[Theme.wallpapers.indices.contains(wallpaper) ? wallpaper : 0].colors
+        let accentColor = Theme.accentChoices[Theme.accentChoices.indices.contains(accent) ? accent : 0].color
+        return VStack(alignment: .leading, spacing: 8) {
+            bubble("Good morning! 👋", outgoing: true, accentColor: accentColor, time: "9:18")
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    RoundedRectangle(cornerRadius: 1).fill(accentColor).frame(width: 2.5)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("You").font(.system(size: textSize - 1.5, weight: .semibold)).foregroundStyle(accentColor)
+                        Text("Good morning! 👋").font(.system(size: textSize - 1.5)).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(6)
+                .background(accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                Text("Do you know what time it is? ⏰").font(.system(size: textSize))
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(Theme.bubbleIncoming, in: RoundedRectangle(cornerRadius: 16))
+            bubble("It's morning in Tashkent ☀️", outgoing: true, accentColor: accentColor, time: "9:22")
         }
-        .padding(.vertical, 4)
+        .padding(18)
+        .frame(maxWidth: .infinity, minHeight: 190)
+        .background {
+            if wallpaper == Theme.customWallpaperIndex, let image = Theme.customWallpaperImage {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+            } else if !colors.isEmpty {
+                LinearGradient(colors: colors.map { $0.opacity(3) }, startPoint: .topLeading, endPoint: .bottomTrailing)
+            } else {
+                Color.secondary.opacity(0.06)
+            }
+        }
+        .clipped()
+        .environment(\.colorScheme, scheme == "dark" ? .dark : scheme == "light" ? .light : .dark)
+    }
+
+    private func bubble(_ text: String, outgoing: Bool, accentColor: Color, time: String) -> some View {
+        HStack(alignment: .lastTextBaseline, spacing: 6) {
+            Text(text).font(.system(size: textSize))
+            Text(time).font(.system(size: 10.5)).opacity(0.7)
+        }
+        .foregroundStyle(solidBubbles ? .white : .primary)
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(solidBubbles ? AnyShapeStyle(accentColor) : AnyShapeStyle(accentColor.opacity(0.17)),
+                    in: RoundedRectangle(cornerRadius: 16))
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private func presetCard(_ preset: Preset) -> some View {
+        let dark = preset.scheme == "dark"
+        let selected = scheme == preset.scheme && accent == preset.accent && solidBubbles == preset.solid && wallpaper == preset.wallpaper
+        let color = Theme.accentChoices[preset.accent].color
+        return Button {
+            scheme = preset.scheme; accent = preset.accent; solidBubbles = preset.solid; wallpaper = preset.wallpaper
+        } label: {
+            VStack(spacing: 5) {
+                VStack(alignment: .leading, spacing: 4) {
+                    RoundedRectangle(cornerRadius: 5).fill(dark ? Color(white: 0.25) : .white).frame(width: 38, height: 9)
+                    RoundedRectangle(cornerRadius: 5).fill(preset.solid ? color : color.opacity(0.35)).frame(width: 46, height: 9)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                .padding(8)
+                .frame(width: 80, height: 54)
+                .background(preset.scheme == "system"
+                            ? AnyShapeStyle(LinearGradient(colors: [.white, Color(white: 0.15)], startPoint: .leading, endPoint: .trailing))
+                            : AnyShapeStyle(dark ? Color(white: 0.12) : Color(white: 0.94)),
+                            in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? Theme.accent : Color.secondary.opacity(0.25), lineWidth: selected ? 2 : 1))
+                Text(preset.id).font(.system(size: 11, weight: selected ? .semibold : .regular))
+                    .foregroundStyle(selected ? Theme.accent : .primary)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func wallpaperSwatch(_ index: Int) -> some View {
+        Button { wallpaper = index } label: {
+            VStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Theme.wallpapers[index].colors.isEmpty
+                          ? AnyShapeStyle(Color.secondary.opacity(0.08))
+                          : AnyShapeStyle(LinearGradient(colors: Theme.wallpapers[index].colors.map { $0.opacity(4) },
+                                                         startPoint: .topLeading, endPoint: .bottomTrailing)))
+                    .frame(width: 62, height: 46)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accent, lineWidth: wallpaper == index ? 2 : 0))
+                Text(Theme.wallpapers[index].name).font(.system(size: 10.5)).foregroundStyle(.secondary)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func chooseWallpaper() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.prompt = "Use as Wallpaper"
+        guard panel.runModal() == .OK, let url = panel.url, let image = NSImage(contentsOf: url),
+              let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.88]) else { return }
+        try? FileManager.default.createDirectory(at: Theme.customWallpaperURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? jpeg.write(to: Theme.customWallpaperURL, options: .atomic)
+        wallpaper = Theme.customWallpaperIndex
     }
 }
 

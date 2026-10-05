@@ -170,7 +170,13 @@ final class ChatCache: @unchecked Sendable {
             users[u.user.id] = u.user
             statuses[u.user.id] = u.user.status
             // In TDLib a private chat's id equals the user's id.
-            return refreshPrivateChat(userId: u.user.id)
+            var events = refreshPrivateChat(userId: u.user.id)
+            if case .userTypeRegular = u.user.type {
+                let identity = UserIdentity(name: Self.fullName(u.user),
+                                            usernames: u.user.usernames?.activeUsernames ?? [], seenAt: Date())
+                events.append(.userIdentity(UserID(u.user.id), identity))
+            }
+            return events
 
         case .updateUserStatus(let u):
             statuses[u.userId] = u.status
@@ -311,15 +317,18 @@ final class ChatCache: @unchecked Sendable {
             let role: GroupSummary.Role
             var canRemove = false
             switch info.status {
-            case .chatMemberStatusCreator(let c):
-                guard c.isMember else { return nil }
+            case .chatMemberStatusCreator(let c) where c.isMember:
                 role = .owner; canRemove = true
             case .chatMemberStatusAdministrator(let a):
                 role = .admin; canRemove = a.rights.canRestrictMembers
-            case .chatMemberStatusMember, .chatMemberStatusRestricted:
+            case .chatMemberStatusMember:
                 role = .member
-            default:
-                return nil
+            case .chatMemberStatusRestricted(let r):
+                role = r.isMember ? .member : .left
+            case .chatMemberStatusLeft, .chatMemberStatusBanned:
+                role = .left
+            case .chatMemberStatusCreator:
+                role = .left
             }
             return GroupSummary(id: ChatID(record.id), title: record.title, isChannel: info.isChannel,
                                 role: role, memberCount: info.memberCount,

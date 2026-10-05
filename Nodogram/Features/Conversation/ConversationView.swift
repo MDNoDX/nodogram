@@ -12,6 +12,17 @@ public struct ConversationView: View {
 
     /// Bumped every 30 s so "last seen 3 minutes ago" stays true.
     @State private var clock = Date()
+    @State private var editingContact = false
+    @State private var confirm: ChatConfirmation?
+
+    private var confirmTitle: String {
+        switch confirm {
+        case .clear: return "Clear chat history?"
+        case .delete: return "Delete this chat?"
+        case .block: return "Block this user?"
+        case nil: return ""
+        }
+    }
 
     public init(model: AppModel) {
         self.model = model
@@ -21,9 +32,12 @@ public struct ConversationView: View {
         if let chat = model.selectedChat {
             VStack(spacing: 0) {
                 ConversationHeader(
+                    model: model,
                     chat: chat,
                     subtitle: subtitle(for: chat, now: clock),
-                    isActivity: model.activityText(for: chat.id) != nil
+                    isActivity: model.activityText(for: chat.id) != nil,
+                    editingContact: $editingContact,
+                    confirm: $confirm
                 )
                 Divider()
 
@@ -46,9 +60,14 @@ public struct ConversationView: View {
                         Divider()
                         CommentsPanel(model: model, state: comments)
                             .transition(.move(edge: .trailing))
+                    } else if model.infoPanelVisible {
+                        Divider()
+                        ChatInfoPanel(model: model, chat: chat)
+                            .transition(.move(edge: .trailing))
                     }
                 }
                 .animation(.easeOut(duration: 0.18), value: model.comments?.postMessageID)
+                .animation(.easeOut(duration: 0.18), value: model.infoPanelVisible)
 
                 if let error = model.conversationError {
                     ErrorBanner(message: error, onDismiss: model.dismissConversationError)
@@ -66,6 +85,26 @@ public struct ConversationView: View {
                     clock = Date()
                 }
             }
+            .sheet(isPresented: $editingContact) {
+                if case .privateChat(let user) = chat.kind {
+                    let parts = chat.title.split(separator: " ", maxSplits: 1).map(String.init)
+                    EditContactSheet(model: model, user: user, firstName: parts.first ?? "",
+                                     lastName: parts.count > 1 ? parts[1] : "", phone: "")
+                }
+            }
+            .confirmationDialog(confirmTitle, isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
+                                titleVisibility: .visible, presenting: confirm) { action in
+                switch action {
+                case .clear:
+                    if chat.id.rawValue > 0 { Button("Clear for Both", role: .destructive) { model.clearHistory(chat.id, forEveryone: true) } }
+                    Button("Clear for Me", role: .destructive) { model.clearHistory(chat.id, forEveryone: false) }
+                case .delete:
+                    if chat.id.rawValue > 0 { Button("Delete for Both", role: .destructive) { model.deleteChat(chat.id, forEveryone: true) } }
+                    Button(chat.id.rawValue > 0 ? "Delete for Me" : "Leave", role: .destructive) { model.deleteChat(chat.id, forEveryone: false) }
+                case .block(let user):
+                    Button("Block", role: .destructive) { model.setBlocked(user, true) }
+                }
+            } message: { _ in Text("This can't be undone.") }
         } else {
             EmptyStateView(
                 icon: "bubble.left.and.text.bubble.right",
@@ -133,54 +172,97 @@ public struct ConversationView: View {
 /// Telegram-style header. macOS shows only one toolbar title in a three-column
 /// window, so the chat's name and presence get a bar of their own.
 private struct ConversationHeader: View {
+    let model: AppModel
     let chat: Chat
     let subtitle: String
     let isActivity: Bool
+    @Binding var editingContact: Bool
+    @Binding var confirm: ChatConfirmation?
 
     var body: some View {
         HStack(spacing: 11) {
-            Avatar(
-                title: chat.title,
-                seed: chat.id.rawValue,
-                size: 36,
-                imagePath: chat.avatarPath,
-                thumbnail: chat.avatarThumbnail,
-                isOnline: chat.presence == .online,
-                isSavedMessages: chat.isSavedMessages
-            )
-
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 4) {
-                    Text(chat.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .lineLimit(1)
-                    if chat.isVerified {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.accent)
-                    }
-                    if chat.isMuted {
-                        Image(systemName: "speaker.slash.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
+            Button { model.infoPanelVisible.toggle() } label: {
+                HStack(spacing: 11) {
+                    Avatar(
+                        title: chat.title,
+                        seed: chat.id.rawValue,
+                        size: 36,
+                        imagePath: chat.avatarPath,
+                        thumbnail: chat.avatarThumbnail,
+                        isOnline: chat.presence == .online,
+                        isSavedMessages: chat.isSavedMessages
+                    )
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 4) {
+                            Text(chat.title)
+                                .font(.system(size: 14, weight: .semibold))
+                                .lineLimit(1)
+                            if chat.isVerified {
+                                Image(systemName: "checkmark.seal.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Theme.accent)
+                            }
+                            if chat.isMuted {
+                                Image(systemName: "speaker.slash.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        if !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(.system(size: 12))
+                                .foregroundStyle(isActivity || chat.presence == .online
+                                                 ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
+                                .lineLimit(1)
+                                .contentTransition(.opacity)
+                                .animation(.easeInOut(duration: 0.2), value: subtitle)
+                        }
                     }
                 }
-                if !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.system(size: 12))
-                        .foregroundStyle(isActivity || chat.presence == .online
-                                         ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.secondary))
-                        .lineLimit(1)
-                        .contentTransition(.opacity)
-                        .animation(.easeInOut(duration: 0.2), value: subtitle)
-                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .help("Show info")
             Spacer()
+            if let progress = model.exportProgress {
+                ProgressView().controlSize(.small)
+                Text("Exporting \(progress)…").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            HeaderButton(symbol: "magnifyingglass", help: "Search (⌘F)") { model.beginConversationSearch() }
+            HeaderButton(symbol: model.infoPanelVisible ? "sidebar.right" : "info.circle", help: "Info") {
+                model.infoPanelVisible.toggle()
+            }
+            Menu {
+                ChatActionsMenu(model: model, chat: chat, editingContact: $editingContact, confirm: $confirm)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
         .background(.bar)
-        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct HeaderButton: View {
+    let symbol: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 14)).frame(width: 30, height: 30).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(help)
     }
 }
 
@@ -268,7 +350,7 @@ private struct MessageTimeline: View {
                 .padding(.top, 6)
             }
             .defaultScrollAnchor(.bottom)
-            .background { ChatWallpaper() }
+            .background { ChatWallpaper(model: model, chatID: chat.id) }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentOffset.y < 280
             } action: { wasNearTop, nearTop in
@@ -409,14 +491,23 @@ struct EditHistoryView: View {
 
 /// The chat background chosen in Settings → Appearance.
 struct ChatWallpaper: View {
-    @AppStorage(Theme.wallpaperKey) private var index = 0
+    let model: AppModel
+    let chatID: ChatID
+    @AppStorage(Theme.wallpaperKey) private var globalIndex = 0
 
     var body: some View {
-        let colors = Theme.wallpapers[Theme.wallpapers.indices.contains(index) ? index : 0].colors
-        if colors.isEmpty {
-            Color.clear
+        // A chat's own wallpaper (⋯ → Change Wallpaper) wins over the default.
+        let _ = model.chatWallpaperVersion
+        let index = model.wallpaper(for: chatID) ?? globalIndex
+        if index == Theme.customWallpaperIndex, let image = Theme.customWallpaperImage {
+            Image(nsImage: image).resizable().aspectRatio(contentMode: .fill).opacity(0.9).clipped()
         } else {
-            LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            let colors = Theme.wallpapers[Theme.wallpapers.indices.contains(index) ? index : 0].colors
+            if colors.isEmpty {
+                Color.clear
+            } else {
+                LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
         }
     }
 }
@@ -653,6 +744,7 @@ struct MessageBubble: View {
     @State private var deleteOptions: TelegramGateway.MessagePermissions?
     @State private var confirmingDelete = false
     @State private var showsEditHistory = false
+    @Environment(\.colorScheme) private var colorScheme
 
     /// Media that looks best edge-to-edge, without bubble padding around it.
     /// Posts with reactions, comments or a quote keep their bubble so those
@@ -680,9 +772,30 @@ struct MessageBubble: View {
                                      bottomTrailingRadius: big, topTrailingRadius: big)
     }
 
+    /// A message that is only one to three emoji shows them large, without
+    /// a bubble, as in Telegram.
+    private var isLargeEmoji: Bool {
+        guard UserDefaults.standard.object(forKey: "general.largeEmoji") as? Bool ?? true,
+              message.media == nil, !message.isDeleted, message.forwardedFrom == nil,
+              message.replyToMessageID == nil, message.reactions.isEmpty else { return false }
+        let text = message.text.trimmingCharacters(in: .whitespaces)
+        guard (1...3).contains(text.count) else { return false }
+        return text.allSatisfy { ch in
+            ch.unicodeScalars.first.map { $0.properties.isEmojiPresentation || ($0.properties.isEmoji && ch.unicodeScalars.count > 1) } ?? false
+        }
+    }
+
+    /// Accent-filled outgoing bubbles (Settings → Appearance).
+    private var isSolid: Bool { message.isOutgoing && !message.isDeleted && Theme.solidBubbles }
+
     var body: some View {
         Group {
-            if isBareMedia, let media = message.media {
+            if isLargeEmoji {
+                VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 2) {
+                    Text(message.text).font(.system(size: 44))
+                    footer
+                }
+            } else if isBareMedia, let media = message.media {
                 bareMedia(media)
             } else {
                 bubble
@@ -817,6 +930,9 @@ struct MessageBubble: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
+        // On an accent fill, text and links turn white.
+        .environment(\.colorScheme, isSolid ? .dark : colorScheme)
+        .tint(isSolid ? .white : Theme.accent)
         .background(fill, in: shape)
         .overlay {
             if message.isDeleted {
@@ -827,6 +943,7 @@ struct MessageBubble: View {
 
     private var fill: AnyShapeStyle {
         if message.isDeleted { return AnyShapeStyle(Theme.failure.opacity(0.07)) }
+        if isSolid { return AnyShapeStyle(Theme.accent) }
         return message.isOutgoing ? AnyShapeStyle(Theme.bubbleOutgoing) : AnyShapeStyle(Theme.bubbleIncoming)
     }
 

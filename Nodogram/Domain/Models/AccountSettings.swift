@@ -158,7 +158,7 @@ public struct StorageUsage: Hashable, Sendable {
 
 /// A group or channel the user belongs to, with what they may do there.
 public struct GroupSummary: Identifiable, Hashable, Sendable {
-    public enum Role: String, Sendable { case owner, admin, member }
+    public enum Role: String, Sendable { case owner, admin, member, left }
 
     public let id: ChatID
     public let title: String

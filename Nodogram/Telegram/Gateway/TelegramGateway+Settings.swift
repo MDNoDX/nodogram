@@ -238,3 +238,14 @@ extension TelegramGateway {
         }
     }
 }
+
+extension TelegramGateway {
+    /// Sets a new profile photo from a file on this Mac.
+    public func setProfilePhoto(path: String) async throws(DomainError) {
+        try await run {
+            _ = try await self.client.setProfilePhoto(
+                isPublic: false,
+                photo: .inputChatPhotoStatic(InputChatPhotoStatic(photo: .inputFileLocal(InputFileLocal(path: path)))))
+        }
+    }
+}
