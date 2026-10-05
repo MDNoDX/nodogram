@@ -45,6 +45,7 @@ struct ChatActionsMenu: View {
                 Button(Theme.wallpapers[index].name) { model.setWallpaper(index, for: chat.id) }
             }
         } label: { Label("Change Wallpaper", systemImage: "paintbrush") }
+        Button { model.assistantChatRequested = true } label: { Label("Understand this Chat (AI)", systemImage: "sparkles") }
         Button { model.setTranslating(chat.id, !model.isTranslating(chat.id)) } label: {
             Label(model.isTranslating(chat.id) ? "Stop Translating" : "Translate Chat", systemImage: "translate")
         }

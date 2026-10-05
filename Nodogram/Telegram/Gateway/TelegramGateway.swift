@@ -71,6 +71,8 @@ public enum TelegramEvent: Sendable {
     case foldersChanged([ChatFolderSummary], mainPosition: Int)
     /// A user's name and usernames as just received, for name-history tracking.
     case userIdentity(UserID, UserIdentity)
+    /// A contact relationship changed: they added or removed you.
+    case contactChanged(UserID, name: String, nowMutual: Bool, wasMutual: Bool, isContact: Bool)
 }
 
 /// Which of Telegram's chat lists to load.

@@ -11,6 +11,9 @@ import Foundation
 struct VaultClient: Sendable {
     let base: URL
     let token: String
+    /// The private channel the app archives story views, typing and contact
+    /// changes to (the bot archives message deletions there separately).
+    var logChannel: Int64?
 
     struct Status: Decodable, Sendable {
         struct Stats: Decodable, Sendable { let total: Int; let deleted: Int; let edited: Int; let chats: Int }
@@ -49,7 +52,7 @@ struct VaultClient: Sendable {
         }
         guard let token = values["VAULT_API_TOKEN"], let port = Int(values["VAULT_PORT"] ?? "47823"),
               let base = URL(string: "http://127.0.0.1:\(port)") else { return nil }
-        return VaultClient(base: base, token: token)
+        return VaultClient(base: base, token: token, logChannel: values["LOG_CHANNEL"].flatMap { Int64($0) })
     }
 
     private static let decoder: JSONDecoder = {

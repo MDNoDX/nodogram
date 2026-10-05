@@ -56,6 +56,8 @@ final class ChatCache: @unchecked Sendable {
     private let lock = NSLock()
     private var records: [Int64: Record] = [:]
     private var users: [Int64: TDLibKit.User] = [:]
+    /// Last-seen (isContact, isMutualContact) per user, to spot changes.
+    private var contactState: [Int64: (contact: Bool, mutual: Bool)] = [:]
     /// Kept apart from `users` because `updateUserStatus` arrives on its own and
     /// TDLibKit's `User` cannot be modified in place.
     private var statuses: [Int64: UserStatus] = [:]
@@ -175,6 +177,13 @@ final class ChatCache: @unchecked Sendable {
                 let identity = UserIdentity(name: Self.fullName(u.user),
                                             usernames: u.user.usernames?.activeUsernames ?? [], seenAt: Date())
                 events.append(.userIdentity(UserID(u.user.id), identity))
+                if let previous = contactState[u.user.id],
+                   previous.mutual != u.user.isMutualContact || previous.contact != u.user.isContact {
+                    events.append(.contactChanged(UserID(u.user.id), name: Self.fullName(u.user),
+                                                  nowMutual: u.user.isMutualContact, wasMutual: previous.mutual,
+                                                  isContact: u.user.isContact))
+                }
+                contactState[u.user.id] = (u.user.isContact, u.user.isMutualContact)
             }
             return events
 

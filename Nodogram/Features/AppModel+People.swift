@@ -103,18 +103,29 @@ extension AppModel {
         }
         update(activity)
 
-        activity.profile = await gateway.personProfile(user)
+        // Profile and the local deleted count run alongside each other.
+        async let profile = gateway.personProfile(user)
+        activity.profile = await profile
         update(activity)
 
         activity.commonGroups = await gateway.groupsInCommon(user)
         update(activity)
 
-        // Their messages in each shared group, a page per group, merged.
+        // Their messages in each shared group — all groups at once, not one by
+        // one, so a person with many shared groups still opens quickly.
+        let groups = Array(activity.commonGroups.prefix(30))
+        let pages = await withTaskGroup(of: (ChatID, [Message], Int).self) { group -> [(ChatID, [Message], Int)] in
+            for chat in groups {
+                group.addTask { let page = await gateway.messages(from: user, in: chat, limit: 20); return (chat, page.messages, page.total) }
+            }
+            var results: [(ChatID, [Message], Int)] = []
+            for await result in group { results.append(result) }
+            return results
+        }
         var all: [Message] = []
-        for chat in activity.commonGroups.prefix(25) {
-            let page = await gateway.messages(from: user, in: chat, limit: 20)
-            activity.groupMessageCounts[chat] = page.total
-            all += page.messages
+        for (chat, messages, total) in pages {
+            activity.groupMessageCounts[chat] = total
+            all += messages
         }
         activity.groupMessages = all.sorted { $0.date > $1.date }
         activity.isLoading = false

@@ -218,6 +218,7 @@ extension SettingsPage {
         case .sessions: return "sessions"
         case .appearance: return "appearance"
         case .language: return "language"
+        case .assistant: return "assistant"
         case .folders, .folderEditor: return "folders"
         case .sidebar: return "sidebar"
         case .nodogramFeatures: return "nodogramFeatures"

@@ -216,6 +216,10 @@ public final class AppModel {
     /// The assistant's latest analysis per chat, and a draft under review.
     public internal(set) var assistantAnalyses: [Int64: AssistantAnalysis] = AssistantStore.load()
     public internal(set) var draftReview: DraftReview?
+    /// Recent channel-archive keys, to avoid posting the same memory twice.
+    var archivedRecently: [String: Date] = [:]
+    /// The ⋯ → "Understand this chat" request.
+    public var assistantChatRequested = false
     /// Bumped when accounts change, so lists redraw.
     public internal(set) var accountsVersion = 0
     /// The account to return to if an Add Account sign-in is cancelled.
@@ -410,6 +414,9 @@ public final class AppModel {
 
         case .userIdentity(let user, let identity):
             noteIdentity(user, identity)
+
+        case .contactChanged(let user, let name, let nowMutual, let wasMutual, let isContact):
+            handleContactChange(user, name: name, nowMutual: nowMutual, wasMutual: wasMutual, isContact: isContact)
 
         case .foldersChanged(let folders, _):
             self.folders = folders

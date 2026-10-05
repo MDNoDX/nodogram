@@ -176,6 +176,8 @@ extension AppModel {
         typingLog[index].outcome = .abandoned
         let event = typingLog[index]
         saveTypingLogSoon()
+        archiveToChannel("✍️ <b>\(Self.htmlEscape(event.name))</b> was typing for \(Self.durationText(event.duration)) but sent nothing · \(Self.stamp())",
+                         dedupe: "typing-\(event.id)")
         guard TrackerSettings.flag(TrackerSettings.typingAbandonedNotifyKey), event.duration >= 2,
               chatsByID[ChatID(event.chatID)]?.isMuted != true else { return }
         SystemNotifications.shared.post(.init(
@@ -335,6 +337,11 @@ extension AppModel {
         guard !fresh.isEmpty else { return }
         storyViewers = (fresh + storyViewers).sorted { $0.viewedAt > $1.viewedAt }
         StoryViewersStore.save(storyViewers)
+        for viewer in fresh {
+            let reaction = viewer.reaction.map { " \($0)" } ?? ""
+            archiveToChannel("👁 <b>\(Self.htmlEscape(viewer.name))</b> viewed your story\(reaction) · \(Self.stamp())",
+                             dedupe: "story-\(viewer.id)")
+        }
         guard TrackerSettings.flag(TrackerSettings.storyViewsNotifyKey), let me = myUserID else { return }
         let names = fresh.prefix(3).map(\.name).joined(separator: ", ")
         SystemNotifications.shared.post(.init(

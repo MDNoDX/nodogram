@@ -112,8 +112,10 @@ export class Vault {
     const result = await this.db.saveEdit(record.chatId, record.messageId, record.text,
       message.edit_date ?? Math.floor(Date.now() / 1000), message);
     if (!result.known) { await this.db.saveMessage(record); return; }
-    if (this.config.notifyEdits && !record.isOutgoing && result.previous !== null) {
-      await this.notify(editedNotice(record.senderName || record.chatTitle, record.chatUsername, result.previous, record.text));
+    if (!record.isOutgoing && result.previous !== null) {
+      const notice = editedNotice(record.senderName || record.chatTitle, record.chatUsername, result.previous, record.text);
+      if (this.config.notifyEdits) await this.notify(notice);
+      await this.archive(notice);
     }
   }
 
@@ -148,9 +150,27 @@ export class Vault {
       }
     }
     if (!fits) await this.notify(text);
+    await this.archive(text, { media: resend ? { resend, fileId: row.file_id, caption: fits ? text : null } : null });
   }
 
   // ── Talking to the owner ──────────────────────────────────────────────────
+
+  /// Posts to the owner's private log channel (the "memories" archive), if set.
+  async archive(html, { media = null } = {}) {
+    if (!this.config.logChannel) return;
+    try {
+      if (media) {
+        const [method, field] = media.resend;
+        await this.bot.call(method, { chat_id: this.config.logChannel, [field]: media.fileId,
+          ...(media.caption ? { caption: media.caption, parse_mode: "HTML" } : {}) });
+        if (!media.caption) await this.bot.call("sendMessage", { chat_id: this.config.logChannel, text: html, parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+      } else {
+        await this.bot.call("sendMessage", { chat_id: this.config.logChannel, text: html, parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+      }
+    } catch (error) {
+      this.log.warn?.("[vault] archive to channel failed:", error.message);
+    }
+  }
 
   async notify(html) {
     try {

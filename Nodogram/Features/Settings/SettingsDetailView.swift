@@ -24,6 +24,7 @@ struct SettingsDetailView: View {
             case .about: AboutPage(model: model)
             case .language: LanguagePage()
             case .filters: FiltersPage(model: model)
+            case .assistant: AssistantPage(model: model)
             }
         }
         .id(model.settingsPage)

@@ -76,6 +76,9 @@ public struct ConversationView: View {
                 if !model.scheduledMessages.isEmpty {
                     ScheduledBar(model: model)
                 }
+                if let review = model.draftReview {
+                    DraftReviewBar(model: model, review: review)
+                }
 
                 bottomBar(for: chat)
             }
@@ -91,6 +94,9 @@ public struct ConversationView: View {
             }
             .sheet(isPresented: Binding(get: { model.summaryRequested }, set: { model.summaryRequested = $0 })) {
                 SummarySheet(model: model, title: chat.title)
+            }
+            .sheet(isPresented: Binding(get: { model.assistantChatRequested }, set: { model.assistantChatRequested = $0 })) {
+                AssistantSheet(model: model, chat: chat)
             }
             .sheet(isPresented: $editingContact) {
                 if case .privateChat(let user) = chat.kind {
@@ -145,8 +151,10 @@ public struct ConversationView: View {
                 onCancelMode: model.cancelComposerMode,
                 onAttach: attach,
                 isSavedMessages: chat.isSavedMessages,
-                onSend: { model.submitComposer() },
-                onSendWithOptions: { silent, date in model.submitComposer(silent: silent, scheduleAt: date) }
+                onSend: { model.sendFromComposer() },
+                onSendWithOptions: { silent, date in model.submitComposer(silent: silent, scheduleAt: date) },
+                assistantReady: model.assistantReady && model.assistantAllowed(in: chat) == nil,
+                onSuggest: { try await model.suggestReplies() }
             )
         }
     }

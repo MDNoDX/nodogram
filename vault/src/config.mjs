@@ -39,6 +39,7 @@ export function loadConfig() {
     apiToken: get("VAULT_API_TOKEN"),
     mediaDir: get("VAULT_MEDIA_DIR", path.join(supportDir, "vault-media")),
     notifyEdits: get("NOTIFY_EDITS", "true") === "true",
+    logChannel: get("LOG_CHANNEL") ? Number(get("LOG_CHANNEL")) : null,
   };
   const missing = ["botToken", "ownerId", "apiToken"].filter((k) => !config[k]);
   if (missing.length) throw new Error(`Missing configuration: ${missing.join(", ")} (see ${envFile})`);

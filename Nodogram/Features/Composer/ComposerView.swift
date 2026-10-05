@@ -17,8 +17,14 @@ public struct ComposerView: View {
     private let onSend: () -> Void
     private let onSendWithOptions: (Bool, Date?) -> Void
     private let isSavedMessages: Bool
+    private let assistantReady: Bool
+    private let onSuggest: () async throws -> [ReplySuggestion]
 
     @State private var scheduling = false
+    @State private var suggesting = false
+    @State private var suggestions: [ReplySuggestion] = []
+    @State private var showSuggestions = false
+    @State private var suggestError: String?
     @State private var scheduleDate = Date().addingTimeInterval(3600)
     @FocusState private var isFocused: Bool
     @AppStorage("composer.sendWithEnter") private var sendWithEnter = true
@@ -32,10 +38,14 @@ public struct ComposerView: View {
         onAttach: @escaping ([URL]) -> Void = { _ in },
         isSavedMessages: Bool = false,
         onSend: @escaping () -> Void,
-        onSendWithOptions: @escaping (Bool, Date?) -> Void = { _, _ in }
+        onSendWithOptions: @escaping (Bool, Date?) -> Void = { _, _ in },
+        assistantReady: Bool = false,
+        onSuggest: @escaping () async throws -> [ReplySuggestion] = { [] }
     ) {
         self.onSendWithOptions = onSendWithOptions
         self.isSavedMessages = isSavedMessages
+        self.assistantReady = assistantReady
+        self.onSuggest = onSuggest
         self.chatID = chatID
         self._text = text
         self.draftIndicatorVisible = draftIndicatorVisible
@@ -117,6 +127,45 @@ public struct ComposerView: View {
                     RoundedRectangle(cornerRadius: 10)
                         .stroke(isFocused ? Theme.accent.opacity(0.55) : Color.secondary.opacity(0.25), lineWidth: 1)
                 )
+
+                if assistantReady {
+                    Button { suggest() } label: {
+                        Image(systemName: suggesting ? "ellipsis" : "sparkles")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(width: 32, height: 32)
+                            .foregroundStyle(Theme.accent)
+                            .background(Theme.accent.opacity(0.12), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(suggesting)
+                    .help("Suggest replies")
+                    .popover(isPresented: $showSuggestions, arrowEdge: .top) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Reply ideas").font(.headline)
+                            if let suggestError {
+                                Text(suggestError).font(.system(size: 12)).foregroundStyle(Theme.failure)
+                            }
+                            ForEach(suggestions, id: \.self) { suggestion in
+                                Button {
+                                    text = suggestion.text
+                                    showSuggestions = false
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(suggestion.tone.uppercased()).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Theme.accent)
+                                        Text(suggestion.text).font(.system(size: 13)).foregroundStyle(.primary)
+                                            .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    .padding(8)
+                                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            Text("Tap to put it in the box. Edit before sending.").font(.system(size: 10.5)).foregroundStyle(.tertiary)
+                        }
+                        .padding(14).frame(width: 320)
+                    }
+                }
 
                 Button(action: onSend) {
                     Image(systemName: "arrow.up")
@@ -213,5 +262,20 @@ public struct ComposerView: View {
         let hour = code == -1 ? 21 : 9
         let date = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: base) ?? Date()
         return date > Date() ? date : date.addingTimeInterval(86_400)
+    }
+
+    private func suggest() {
+        suggesting = true; suggestError = nil
+        Task {
+            do {
+                suggestions = try await onSuggest()
+                showSuggestions = !suggestions.isEmpty
+                if suggestions.isEmpty { suggestError = "No ideas this time." }
+            } catch {
+                suggestError = (error as? AIError)?.errorDescription ?? error.localizedDescription
+                showSuggestions = true
+            }
+            suggesting = false
+        }
     }
 }
