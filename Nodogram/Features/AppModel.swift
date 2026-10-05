@@ -213,6 +213,9 @@ public final class AppModel {
     var pendingTranslations: Set<String> = []
     /// Set by the ⋯ menu; the conversation shows the summary sheet.
     public var summaryRequested = false
+    /// The assistant's latest analysis per chat, and a draft under review.
+    public internal(set) var assistantAnalyses: [Int64: AssistantAnalysis] = AssistantStore.load()
+    public internal(set) var draftReview: DraftReview?
     /// Bumped when accounts change, so lists redraw.
     public internal(set) var accountsVersion = 0
     /// The account to return to if an Add Account sign-in is cancelled.
