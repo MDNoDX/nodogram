@@ -38,5 +38,6 @@ struct SettingsSnapshotTests {
         try render(FoldersPage(model: model), "settings-folders")
         try render(FolderEditorPage(model: model, folderID: nil), "settings-folder-editor", size: CGSize(width: 760, height: 1100))
         try render(SettingsListView(model: model), "settings-list", size: CGSize(width: 340, height: 800))
+        try render(AssistantPage(model: model), "settings-assistant", size: CGSize(width: 760, height: 1000))
     }
 }
