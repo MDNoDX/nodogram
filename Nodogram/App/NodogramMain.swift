@@ -13,8 +13,6 @@ import NodogramUI
 struct NodogramMain: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-    @AppStorage(BackgroundSettings.menuBarIconKey) private var showsMenuBarIcon = true
-
     var body: some Scene {
         WindowGroup("Nodogram", id: "main") {
             MainWindowView(model: .shared)
@@ -22,18 +20,19 @@ struct NodogramMain: App {
         // Content-sized minimums; the window frame itself is restored by macOS.
         .defaultSize(width: 1180, height: 760)
         .windowResizability(.contentMinSize)
+        // Always open the window at launch, even when the last session ended
+        // with it closed (Nodogram then lived in the menu bar).
+        .defaultLaunchBehavior(.presented)
         .commands { NodogramCommands() }
 
-        MenuBarExtra(isInserted: $showsMenuBarIcon) {
-            MenuBarContent(model: .shared)
-        } label: {
-            MenuBarLabel(model: .shared)
-        }
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isTerminating = false
+    private let statusItem = StatusItemController()
+    private var defaultsObserver: NSObjectProtocol?
 
     /// Closing the window keeps Nodogram running in the menu bar (unless the
     /// user turned that off), so updates keep arriving.
@@ -61,5 +60,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // front: macOS already activates an app the user opens, and stealing
         // focus from whatever they are doing is never acceptable.
         NSApp.setActivationPolicy(.regular)
+        updateStatusItem()
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateStatusItem() }
+        }
+    }
+
+    func updateStatusItem() {
+        let show = UserDefaults.standard.object(forKey: BackgroundSettings.menuBarIconKey) as? Bool ?? true
+        if show { statusItem.install() } else { statusItem.remove() }
     }
 }
