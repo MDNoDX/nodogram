@@ -329,3 +329,22 @@ The first launch of this version reads the old Keychain item once and moves
 it. Nodogram also now sets Telegram's `online` option from app focus (online
 while active, offline 15 s after), and keeps running in the menu bar when the
 window closes so updates keep arriving.
+
+---
+
+## D17 — An always-on vault through the user's own Business bot
+
+**Date:** 2026-10-05 · **Status:** settled
+
+The user wanted deletions caught even when they are not using Telegram.
+Vercel cannot hold a Telegram connection (functions are short-lived), and
+polling would miss messages sent and deleted between polls. Telegram Business
+offers the sanctioned route: a bot connected to the user's account receives
+`business_message`, `edited_business_message` and `deleted_business_messages`
+for their private chats, and Telegram queues those updates for 24 hours.
+
+`vault/` is that bot's service: Node.js long polling, PostgreSQL (the user's
+local Postgres.app), a LaunchAgent, and a 127.0.0.1-only API with a bearer
+token that the Mac app syncs from every 15 s. Owner-only by user id. Group
+deletions are not part of Business and stay an in-app, in-place feature.
+Bot tokens live only in `vault.env`, outside the repository.

@@ -230,6 +230,36 @@ struct FeaturesPage: View {
             }
 
             Section {
+                if let vault = model.vaultStatus {
+                    LabeledContent("Status") {
+                        Label(vault.connected ? "Connected to your account" : "Running — not connected yet",
+                              systemImage: vault.connected ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(vault.connected ? Theme.success : Theme.warning)
+                    }
+                    LabeledContent("Kept", value: "\(vault.kept) messages · \(vault.deleted) deleted · \(vault.edited) edited")
+                } else {
+                    LabeledContent("Status") {
+                        Label("Not running on this Mac", systemImage: "xmark.octagon").foregroundStyle(.secondary)
+                    }
+                }
+                HStack {
+                    Button("Open the Bot in Telegram") {
+                        if let url = URL(string: "https://t.me/MDNoDX_bot") { NSWorkspace.shared.open(url) }
+                    }
+                    Button("Check Now") { Task { await model.syncVault() } }
+                }
+            } header: { Label("Nodogram Vault — always on", systemImage: "lock.shield") } footer: {
+                SettingsNote("""
+                    Your own Telegram Business bot keeps every message in your private chats, even when Nodogram \
+                    is closed: Telegram holds the bot's updates for 24 hours, and the Vault service on this Mac \
+                    collects them. When someone deletes or edits a message, the bot sends it to you at once — \
+                    on your phone too — and it appears here in that chat and under Deleted, photos and voice included. \
+                    To connect: in @BotFather turn on Business Mode for the bot, press Start in the bot, then \
+                    Telegram → Settings → Telegram Business → Chatbots → add the bot for all 1-to-1 chats.
+                    """)
+            }
+
+            Section {
                 Toggle("Keep messages others delete", isOn: $keepDeleted)
                 Toggle("Notify me when someone deletes a message", isOn: $deletedNotify).disabled(!keepDeleted)
                 Picker("Keep deleted messages for", selection: $retentionDays) {

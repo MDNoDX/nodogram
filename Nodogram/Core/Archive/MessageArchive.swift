@@ -17,6 +17,7 @@
 import CryptoKit
 import Foundation
 import GRDB
+import ImageIO
 import NodogramDomain
 
 public actor MessageArchive {
@@ -32,6 +33,9 @@ public actor MessageArchive {
         var isOutgoing: Bool
         var isService: Bool
         var editDate: Date?
+        /// Media kept by Nodogram Vault (the Business bot service), on disk.
+        var mediaPath: String?
+        var mediaKind: String?
     }
 
     private let database: DatabaseQueue
@@ -137,6 +141,97 @@ public actor MessageArchive {
         }
     }
 
+    // MARK: - Import from Nodogram Vault
+
+    /// A message the Vault service kept, for merging into this archive.
+    public struct Imported: Sendable {
+        public let chatID: ChatID
+        public let messageID: MessageID
+        public let senderID: Int64?
+        public let senderName: String
+        public let text: String
+        public let sentAt: Date
+        public let deletedAt: Date?
+        public let isOutgoing: Bool
+        public let mediaKind: String?
+        public let mediaPath: String?
+
+        public init(chatID: ChatID, messageID: MessageID, senderID: Int64?, senderName: String, text: String,
+                    sentAt: Date, deletedAt: Date?, isOutgoing: Bool, mediaKind: String?, mediaPath: String?) {
+            self.chatID = chatID; self.messageID = messageID; self.senderID = senderID; self.senderName = senderName
+            self.text = text; self.sentAt = sentAt; self.deletedAt = deletedAt; self.isOutgoing = isOutgoing
+            self.mediaKind = mediaKind; self.mediaPath = mediaPath
+        }
+    }
+
+    /// Adds Vault messages: unseen ones are inserted; known ones gain the
+    /// deletion mark and media path. Returns how many became newly deleted.
+    @discardableResult
+    public func importMessages(_ items: [Imported]) -> Int {
+        var newlyDeleted = 0
+        let now = Date().timeIntervalSince1970
+        try? database.write { db in
+            for item in items {
+                let existing = try Row.fetchOne(db, sql: """
+                    SELECT payload, deleted_at FROM archived_message WHERE chat_id = ? AND message_id = ?
+                    """, arguments: [item.chatID.rawValue, item.messageID.rawValue])
+                if let existing {
+                    let stored: Data? = existing["payload"]
+                    var payload = stored.flatMap { self.unseal($0) }
+                    if payload?.mediaPath == nil, let path = item.mediaPath {
+                        payload?.mediaPath = path
+                        payload?.mediaKind = item.mediaKind
+                    }
+                    let sealed = payload.flatMap { self.seal(payload: $0) }
+                    let wasDeleted = (existing["deleted_at"] as Double?) != nil
+                    if let deletedAt = item.deletedAt, !wasDeleted { newlyDeleted += 1
+                        try db.execute(sql: "UPDATE archived_message SET deleted_at = ? WHERE chat_id = ? AND message_id = ?",
+                                       arguments: [deletedAt.timeIntervalSince1970, item.chatID.rawValue, item.messageID.rawValue])
+                    }
+                    if let sealed {
+                        try db.execute(sql: "UPDATE archived_message SET payload = ? WHERE chat_id = ? AND message_id = ?",
+                                       arguments: [sealed, item.chatID.rawValue, item.messageID.rawValue])
+                    }
+                } else {
+                    let payload = Payload(text: item.text, entities: [], attachmentLabel: Self.label(for: item.mediaKind),
+                                          senderName: item.senderName, senderID: item.senderID, isOutgoing: item.isOutgoing,
+                                          isService: false, editDate: nil, mediaPath: item.mediaPath, mediaKind: item.mediaKind)
+                    guard let sealed = seal(payload: payload) else { continue }
+                    try db.execute(sql: """
+                        INSERT INTO archived_message (chat_id, message_id, sent_at, stored_at, deleted_at, payload)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """, arguments: [item.chatID.rawValue, item.messageID.rawValue, item.sentAt.timeIntervalSince1970,
+                                         now, item.deletedAt?.timeIntervalSince1970, sealed])
+                    if item.deletedAt != nil { newlyDeleted += 1 }
+                }
+            }
+        }
+        return newlyDeleted
+    }
+
+    /// Adds edit versions the Vault saw (version 0 is the original).
+    public func importVersions(chatID: ChatID, messageID: MessageID, versions: [Version]) {
+        let known = Set(editHistory(chatID: chatID, messageID: messageID).map(\.text))
+        for version in versions.dropFirst() where !known.contains(version.text) {
+            recordEdit(chatID: chatID, messageID: messageID, text: version.text, at: version.date)
+        }
+    }
+
+    static func label(for kind: String?) -> String? {
+        switch kind {
+        case "photo": return "Photo"
+        case "video": return "Video"
+        case "animation": return "GIF"
+        case "voice": return "Voice message"
+        case "video_note": return "Video message"
+        case "audio": return "Audio"
+        case "sticker": return "Sticker"
+        case "document": return "File"
+        case nil: return nil
+        default: return "Attachment"
+        }
+    }
+
     // MARK: - Edit history
 
     /// Records a new version of a message's text. The original stays in
@@ -157,6 +252,7 @@ public actor MessageArchive {
     public struct Version: Sendable, Hashable {
         public let date: Date
         public let text: String
+        public init(date: Date, text: String) { self.date = date; self.text = text }
     }
 
     /// Every known version of a message, original first. Empty when the
@@ -287,8 +383,18 @@ public actor MessageArchive {
             text: message.text, entities: message.entities, attachmentLabel: message.attachmentLabel,
             senderName: message.senderName, senderID: message.senderID?.rawValue,
             isOutgoing: message.isOutgoing, isService: message.isService, editDate: message.editDate)
+        return seal(payload: payload)
+    }
+
+    private func seal(payload: Payload) -> Data? {
         guard let plain = try? JSONEncoder().encode(payload) else { return nil }
         return try? AES.GCM.seal(plain, using: key).combined
+    }
+
+    private func unseal(_ sealed: Data) -> Payload? {
+        guard let box = try? AES.GCM.SealedBox(combined: sealed),
+              let plain = try? AES.GCM.open(box, using: key) else { return nil }
+        return try? JSONDecoder().decode(Payload.self, from: plain)
     }
 
     private func open(_ row: Row) -> Message? {
@@ -314,8 +420,48 @@ public actor MessageArchive {
             entities: payload.entities,
             // An archived copy is never offered for saving: it may hold media
             // labels only, and the sender chose to withdraw the original.
-            canBeSaved: false,
+            media: payload.mediaPath.flatMap { Self.media(kind: payload.mediaKind, path: $0) },
+            // An archived copy is not offered for saving, except media the
+            // Vault already holds on this Mac (never copy-protected content).
+            canBeSaved: payload.mediaPath != nil,
             deletedAt: deleted.map(Date.init(timeIntervalSince1970:))
         )
+    }
+
+    /// Media for a file the Vault kept, playable and viewable from disk.
+    static func media(kind: String?, path: String) -> MessageMedia? {
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? 0
+        let file = MediaFile(id: stableID(path), uniqueID: "vault:\(path)", size: size, downloadedSize: size, localPath: path)
+        let name = (path as NSString).lastPathComponent
+        switch kind {
+        case "photo":
+            let dims = imageSize(path)
+            return .photo(PhotoMedia(preview: file, full: file, width: dims.0, height: dims.1, minithumbnail: nil))
+        case "video", "animation", "video_note":
+            let video = VideoMedia(file: file, thumbnail: nil, minithumbnail: nil, width: 0, height: 0, duration: 0,
+                                   mimeType: "video/mp4", fileName: name, supportsStreaming: false)
+            return kind == "animation" ? .animation(video) : .video(video)
+        case "voice":
+            return .voiceNote(VoiceNoteMedia(file: file, duration: 0, waveform: [], mimeType: "audio/ogg"))
+        default:
+            return .document(DocumentMedia(file: file, fileName: name, mimeType: "", thumbnail: nil))
+        }
+    }
+
+    /// A negative id that never collides with TDLib's file ids and is the
+    /// same on every launch (Swift's hashValue is not).
+    static func stableID(_ path: String) -> Int {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in path.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
+        return -Int(hash & 0x3fff_ffff_ffff) - 1
+    }
+
+    static func imageSize(_ path: String) -> (Int, Int) {
+        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int
+        else { return (0, 0) }
+        return (w, h)
     }
 }

@@ -38,3 +38,7 @@ build/
 # Generated icon artifacts; make_icon.py regenerates both
 Tools/icon/*.iconset/
 Tools/icon/*.icns
+
+# Nodogram Vault (local bot service)
+vault/node_modules/
+vault.env

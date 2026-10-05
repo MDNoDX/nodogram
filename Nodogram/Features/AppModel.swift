@@ -193,6 +193,9 @@ public final class AppModel {
     var openTypingSessions: [String: UUID] = [:]
     var typingNotifiedAt: [ChatID: Date] = [:]
     var typingSweepTask: Task<Void, Never>?
+    var vaultTask: Task<Void, Never>?
+    /// Nodogram Vault's state, when it runs on this Mac.
+    public internal(set) var vaultStatus: VaultStatus?
     var presenceObservers: [any NSObjectProtocol] = []
     var offlineTask: Task<Void, Never>?
     var storyPollTask: Task<Void, Never>?
@@ -455,6 +458,7 @@ public final class AppModel {
         Task { await gateway.loadStories() }
         startStoryViewerPolling()
         startPresenceTracking()
+        startVaultSync()
 
         Task { [weak self] in
             guard let me = try? await gateway.myUserID() else { return }
