@@ -348,3 +348,21 @@ local Postgres.app), a LaunchAgent, and a 127.0.0.1-only API with a bearer
 token that the Mac app syncs from every 15 s. Owner-only by user id. Group
 deletions are not part of Business and stay an in-app, in-place feature.
 Bot tokens live only in `vault.env`, outside the repository.
+
+---
+
+## D18 — What cannot be built, and the closest honest substitute
+
+**Date:** 2026-10-05 · **Status:** settled
+
+- **Seeing what someone types before they send.** Telegram transmits only the
+  action ("typing", "recording voice") — never draft text — to anyone,
+  including bots and other sessions. Substitute: the typing log (who, when,
+  how long, "typed but didn't send") and the Vault, which keeps every message
+  even if it is deleted seconds after sending.
+- **Who opened your profile.** No API exposes profile views. Services that
+  claim to are scams. Substitute: story viewers are kept (D15).
+- **Who saved your number.** Only mutual contacts are revealed
+  (`isMutualContact`); shown under My Activity → Saved me.
+- **Typing while the Mac is off.** Bots never receive typing; only a running
+  client does, so Nodogram stays in the menu bar and starts at login.
