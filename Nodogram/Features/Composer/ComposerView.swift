@@ -1,7 +1,7 @@
 //  Message composer.
 //
-//  ⌘↩ sends; ↩ inserts a newline. In a messenger used for real work an
-//  accidental send is worse than an extra keystroke (brief §21).
+//  ↩ sends and ⇧↩ starts a new line, or ⌘↩ sends (Settings → General).
+//  Right-click the send button to send without sound or schedule.
 
 import SwiftUI
 import NodogramDomain
@@ -15,7 +15,11 @@ public struct ComposerView: View {
     private let onCancelMode: () -> Void
     private let onAttach: ([URL]) -> Void
     private let onSend: () -> Void
+    private let onSendWithOptions: (Bool, Date?) -> Void
+    private let isSavedMessages: Bool
 
+    @State private var scheduling = false
+    @State private var scheduleDate = Date().addingTimeInterval(3600)
     @FocusState private var isFocused: Bool
     @AppStorage("composer.sendWithEnter") private var sendWithEnter = true
 
@@ -26,8 +30,12 @@ public struct ComposerView: View {
         mode: AppModel.ComposerMode = .normal,
         onCancelMode: @escaping () -> Void = {},
         onAttach: @escaping ([URL]) -> Void = { _ in },
-        onSend: @escaping () -> Void
+        isSavedMessages: Bool = false,
+        onSend: @escaping () -> Void,
+        onSendWithOptions: @escaping (Bool, Date?) -> Void = { _, _ in }
     ) {
+        self.onSendWithOptions = onSendWithOptions
+        self.isSavedMessages = isSavedMessages
         self.chatID = chatID
         self._text = text
         self.draftIndicatorVisible = draftIndicatorVisible
@@ -120,6 +128,37 @@ public struct ComposerView: View {
                 .buttonStyle(.plain)
                 .disabled(!canSend)
                 .keyboardShortcut(.return, modifiers: .command)
+                .contextMenu {
+                    Button { onSendWithOptions(true, nil) } label: { Label("Send Without Sound", systemImage: "bell.slash") }
+                    Button { scheduling = true } label: {
+                        Label(isSavedMessages ? "Set a Reminder…" : "Schedule Message…", systemImage: "calendar.badge.clock")
+                    }
+                }
+                .popover(isPresented: $scheduling, arrowEdge: .top) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(isSavedMessages ? "Remind me" : "Send on").font(.headline)
+                        DatePicker("", selection: $scheduleDate, in: Date().addingTimeInterval(60)...,
+                                   displayedComponents: [.date, .hourAndMinute])
+                            .datePickerStyle(.graphical).labelsHidden()
+                        HStack {
+                            ForEach([("In 1 hour", 3600.0), ("Tonight 21:00", -1), ("Tomorrow 9:00", -2)], id: \.0) { item in
+                                Button(item.0) { scheduleDate = Self.preset(item.1) }.controlSize(.small)
+                            }
+                        }
+                        HStack {
+                            Spacer()
+                            Button("Cancel") { scheduling = false }
+                            Button(isSavedMessages ? "Set Reminder" : "Schedule") {
+                                scheduling = false
+                                onSendWithOptions(false, scheduleDate)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!canSend)
+                        }
+                    }
+                    .padding(14)
+                    .frame(width: 300)
+                }
                 .help("\(L10n.send) (⌘↩)")
                 .accessibilityLabel(L10n.send)
             }
@@ -165,5 +204,14 @@ public struct ComposerView: View {
         panel.message = "Choose photos, videos or files to send"
         panel.prompt = "Send"
         if panel.runModal() == .OK { onAttach(panel.urls) }
+    }
+
+    static func preset(_ code: Double) -> Date {
+        let calendar = Calendar.current
+        if code > 0 { return Date().addingTimeInterval(code) }
+        let base = code == -1 ? Date() : calendar.date(byAdding: .day, value: 1, to: Date())!
+        let hour = code == -1 ? 21 : 9
+        let date = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: base) ?? Date()
+        return date > Date() ? date : date.addingTimeInterval(86_400)
     }
 }

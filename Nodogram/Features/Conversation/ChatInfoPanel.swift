@@ -45,6 +45,11 @@ struct ChatActionsMenu: View {
                 Button(Theme.wallpapers[index].name) { model.setWallpaper(index, for: chat.id) }
             }
         } label: { Label("Change Wallpaper", systemImage: "paintbrush") }
+        Button { model.setTranslating(chat.id, !model.isTranslating(chat.id)) } label: {
+            Label(model.isTranslating(chat.id) ? "Stop Translating" : "Translate Chat", systemImage: "translate")
+        }
+        Button { model.summaryRequested = true } label: { Label("Summarize with Apple Intelligence…", systemImage: "sparkles") }
+            .disabled(!model.canSummarize)
         Button { model.exportChat(chat.id) } label: { Label("Export Chat History…", systemImage: "square.and.arrow.up") }
         Divider()
         Menu {

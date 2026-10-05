@@ -201,6 +201,18 @@ public final class AppModel {
     public internal(set) var chatWallpaperVersion = 0
     /// Messages gathered so far while exporting a chat; nil when idle.
     public internal(set) var exportProgress: Int?
+    /// Messages scheduled in the open chat.
+    public internal(set) var scheduledMessages: [Message] = []
+    /// App lock (Settings → Privacy): chats hidden until Touch ID.
+    public internal(set) var isLocked = false
+    var lockObservers: [any NSObjectProtocol] = []
+    var lastActiveAt: Date?
+    /// Chats shown with every incoming message translated.
+    public internal(set) var translatedChats: Set<ChatID> = []
+    public internal(set) var translations: [String: String] = [:]
+    var pendingTranslations: Set<String> = []
+    /// Set by the ⋯ menu; the conversation shows the summary sheet.
+    public var summaryRequested = false
     /// Nodogram Vault's state, when it runs on this Mac.
     public internal(set) var vaultStatus: VaultStatus?
     var presenceObservers: [any NSObjectProtocol] = []
@@ -468,6 +480,7 @@ public final class AppModel {
         Task { await gateway.loadStories() }
         startStoryViewerPolling()
         startPresenceTracking()
+        startAppLock()
         startVaultSync()
 
         Task { [weak self] in
@@ -555,6 +568,8 @@ public final class AppModel {
         }
 
         selectedChatID = chatID
+        scheduledMessages = []
+        if chatID != nil { Task { [weak self] in await self?.refreshScheduled() } }
         noteNavigation()
         pendingJumpID = nil
         if let chatID { noteRecentlyViewed(chatID) }

@@ -82,7 +82,9 @@ extension AppModel {
     }
 
     /// Sends, replies or saves an edit depending on the composer's mode.
-    public func submitComposer() {
+    /// Sends the composer's text. `silent` sends without a notification;
+    /// `scheduleAt` has Telegram send it later (in Saved Messages, a reminder).
+    public func submitComposer(silent: Bool = false, scheduleAt: Date? = nil) {
         let text = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let gateway, let chatID = selectedChatID else { return }
         let mode = composerMode
@@ -103,7 +105,11 @@ extension AppModel {
         draftIndicatorVisible = false
         Task { [weak self] in
             do {
-                try await gateway.sendText(text, to: chatID, replyTo: replyTo)
+                try await gateway.sendText(text, to: chatID, replyTo: replyTo, silent: silent, scheduleAt: scheduleAt)
+                if let scheduleAt {
+                    self?.showToast("Scheduled for \(scheduleAt.formatted(date: .abbreviated, time: .shortened))")
+                    await self?.refreshScheduled()
+                }
             } catch {
                 guard let self else { return }
                 if self.selectedChatID == chatID, self.draftText.isEmpty { self.draftText = text }
@@ -507,6 +513,29 @@ extension AppModel {
             }
             self?.selectedDestination = .allChats
             self?.select(chat)
+        }
+    }
+
+    // MARK: - Scheduled
+
+    public func refreshScheduled() async {
+        guard let gateway, let chatID = selectedChatID else { scheduledMessages = []; return }
+        scheduledMessages = await gateway.scheduledMessages(in: chatID)
+    }
+
+    public func sendScheduledNow(_ message: Message) {
+        guard let gateway else { return }
+        Task { [weak self] in
+            try? await gateway.sendScheduledNow(message.id, in: message.chatID)
+            await self?.refreshScheduled()
+        }
+    }
+
+    public func cancelScheduled(_ message: Message) {
+        guard let gateway else { return }
+        Task { [weak self] in
+            try? await gateway.deleteScheduled([message.id], in: message.chatID)
+            await self?.refreshScheduled()
         }
     }
 }

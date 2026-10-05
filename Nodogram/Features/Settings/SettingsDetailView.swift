@@ -23,7 +23,7 @@ struct SettingsDetailView: View {
             case .nodogramFeatures: FeaturesPage(model: model)
             case .about: AboutPage(model: model)
             case .language: LanguagePage()
-            case .filters: AboutPage(model: model)
+            case .filters: FiltersPage(model: model)
             }
         }
         .id(model.settingsPage)

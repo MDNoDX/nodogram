@@ -71,6 +71,7 @@ public struct MainWindowView: View {
             case .ready:
                 mainLayout
                     .overlay { MediaViewerOverlay(model: model) }
+                    .overlay { if model.isLocked { LockScreen(model: model) } }
                     .overlay { StoryViewerOverlay(model: model) }
                     .overlay(alignment: .top) {
                         if model.isPaletteVisible {

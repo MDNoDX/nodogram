@@ -55,6 +55,12 @@ struct MessageMenu: View {
             } label: { Label("Copy Message Link", systemImage: "link") }
         }
 
+        if let sender = message.senderID, !message.isOutgoing, message.chatID.rawValue < 0 {
+            Button {
+                MessageFilterSettings.hideSender(sender)
+                model.showToast("Messages from \(message.senderName) are hidden")
+            } label: { Label("Hide Messages from \(message.senderName)", systemImage: "eye.slash") }
+        }
         if !message.isService {
             Button {
                 model.toggleStar(message)

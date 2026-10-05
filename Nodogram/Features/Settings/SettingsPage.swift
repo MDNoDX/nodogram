@@ -68,7 +68,7 @@ public enum SettingsPage: Hashable, Sendable {
         [.profile],
         [.general, .notifications, .privacy, .dataStorage, .sessions, .appearance, .language],
         [.folders, .sidebar],
-        [.nodogramFeatures],
+        [.nodogramFeatures, .filters],
         [.about],
     ]
 

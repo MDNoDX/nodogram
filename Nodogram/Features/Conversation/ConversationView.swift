@@ -73,6 +73,10 @@ public struct ConversationView: View {
                     ErrorBanner(message: error, onDismiss: model.dismissConversationError)
                 }
 
+                if !model.scheduledMessages.isEmpty {
+                    ScheduledBar(model: model)
+                }
+
                 bottomBar(for: chat)
             }
             .background(ScreenshotProtection(isProtected: chat.hasProtectedContent))
@@ -84,6 +88,9 @@ public struct ConversationView: View {
                     try? await Task.sleep(for: .seconds(30))
                     clock = Date()
                 }
+            }
+            .sheet(isPresented: Binding(get: { model.summaryRequested }, set: { model.summaryRequested = $0 })) {
+                SummarySheet(model: model, title: chat.title)
             }
             .sheet(isPresented: $editingContact) {
                 if case .privateChat(let user) = chat.kind {
@@ -137,7 +144,9 @@ public struct ConversationView: View {
                 mode: model.composerMode,
                 onCancelMode: model.cancelComposerMode,
                 onAttach: attach,
-                onSend: model.submitComposer
+                isSavedMessages: chat.isSavedMessages,
+                onSend: { model.submitComposer() },
+                onSendWithOptions: { silent, date in model.submitComposer(silent: silent, scheduleAt: date) }
             )
         }
     }
@@ -446,6 +455,78 @@ private struct MessageTimeline: View {
     }
 }
 
+/// The on-device summary of the open chat.
+struct SummarySheet: View {
+    let model: AppModel
+    let title: String
+    @State private var summary: String?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Summary of \(title)", systemImage: "sparkles").font(.headline)
+            if let summary {
+                ScrollView { Text(summary).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+                    .frame(maxHeight: 360)
+            } else {
+                HStack { ProgressView().controlSize(.small); Text("Reading the latest messages on this Mac…").foregroundStyle(.secondary) }
+            }
+            Text("Made by Apple Intelligence on this Mac. Nothing is sent anywhere.").font(.system(size: 11)).foregroundStyle(.tertiary)
+            HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
+        }
+        .padding(20)
+        .frame(width: 460)
+        .task { summary = await model.summarizeChat() }
+    }
+}
+
+/// "N scheduled" above the composer, with the list on click.
+struct ScheduledBar: View {
+    let model: AppModel
+    @State private var showing = false
+
+    var body: some View {
+        Button { showing = true } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "clock.badge")
+                Text(model.scheduledMessages.count == 1 ? "1 scheduled message" : "\(model.scheduledMessages.count) scheduled messages")
+                Spacer()
+                Image(systemName: "chevron.up")
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 16).padding(.vertical, 7)
+            .background(Theme.accent.opacity(0.08))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showing, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Scheduled").font(.headline)
+                ForEach(model.scheduledMessages, id: \.uniqueKey) { message in
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(message.text.isEmpty ? (message.attachmentLabel ?? "Message") : message.text)
+                                .font(.system(size: 12.5)).lineLimit(3)
+                            if message.date.timeIntervalSince1970 > 1 {
+                                Text(message.date.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        Button("Send Now") { model.sendScheduledNow(message) }.controlSize(.small)
+                        Button(role: .destructive) { model.cancelScheduled(message) } label: { Image(systemName: "trash") }
+                            .controlSize(.small)
+                    }
+                    Divider()
+                }
+            }
+            .padding(14)
+            .frame(width: 360)
+        }
+    }
+}
+
 /// Every version of an edited message that this Mac saw, original first.
 struct EditHistoryView: View {
     let model: AppModel
@@ -655,8 +736,17 @@ struct MessageRow: View {
     private var showsAvatarColumn: Bool { showsSender && !message.isOutgoing }
 
     private var isSelected: Bool { model.selectedMessageIDs.contains(message.id) }
+    @State private var revealed = false
 
     var body: some View {
+        if !revealed, let reason = MessageFilterSettings.reason(for: message) {
+            FilteredMessageLine(reason: reason) { revealed = true }
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
         HStack(alignment: .center, spacing: 10) {
             if model.isSelecting, !message.isDeleted {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
@@ -915,6 +1005,23 @@ struct MessageBubble: View {
                                 .help("Click to reveal")
                         }
                     }
+            }
+
+            if model.isTranslating(message.chatID), !message.isOutgoing, !message.text.isEmpty {
+                Group {
+                    if let translated = model.translation(for: message) {
+                        if !translated.isEmpty {
+                            HStack(alignment: .top, spacing: 5) {
+                                Image(systemName: "translate").font(.system(size: 10)).foregroundStyle(Theme.accent)
+                                Text(translated).font(.system(size: Theme.messageSize - 0.5)).foregroundStyle(.secondary)
+                                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    } else {
+                        ProgressView().controlSize(.mini)
+                    }
+                }
+                .onAppear { model.ensureTranslation(for: message) }
             }
 
             if !message.reactions.isEmpty, !message.isDeleted {

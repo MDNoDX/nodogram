@@ -342,7 +342,13 @@ public final class TelegramGateway: @unchecked Sendable {
     }
 
     public func sendText(_ text: String, to chat: ChatID, replyTo: MessageID? = nil,
-                         thread: Int64? = nil) async throws(DomainError) {
+                         thread: Int64? = nil, silent: Bool = false, scheduleAt: Foundation.Date? = nil) async throws(DomainError) {
+        let options: MessageSendOptions? = (silent || scheduleAt != nil) ? MessageSendOptions(
+            allowPaidBroadcast: false, disableNotification: silent, effectId: TdInt64(0), fromBackground: false,
+            onlyPreview: false, paidMessageStarCount: 0, protectContent: false,
+            schedulingState: scheduleAt.map { .messageSchedulingStateSendAtDate(
+                MessageSchedulingStateSendAtDate(repeatPeriod: 0, sendDate: Int($0.timeIntervalSince1970))) },
+            sendingId: 0, suggestedPostInfo: nil, updateOrderOfInstalledStickerSets: false) : nil
         try await run {
             // The pending message arrives through `updateNewMessage`, and its
             // confirmation through `updateMessageSendSucceeded`; the return value
@@ -354,7 +360,7 @@ public final class TelegramGateway: @unchecked Sendable {
                     linkPreviewOptions: nil,
                     text: FormattedText(entities: [], text: text)
                 )),
-                options: nil,
+                options: options,
                 replyMarkup: nil,
                 replyTo: replyTo.map {
                     .inputMessageReplyToMessage(InputMessageReplyToMessage(
@@ -409,6 +415,22 @@ public final class TelegramGateway: @unchecked Sendable {
     /// existing unencrypted database to an encrypted one.
     public func setDatabaseKey(_ key: Data) async throws(DomainError) {
         try await run { _ = try await self.client.setDatabaseEncryptionKey(newEncryptionKey: key) }
+    }
+
+    /// Messages waiting to be sent at a set time, in one chat.
+    public func scheduledMessages(in chat: ChatID) async -> [NodogramDomain.Message] {
+        let found = try? await client.getChatScheduledMessages(chatId: chat.rawValue)
+        return (found?.messages ?? []).compactMap { $0 }.map(cache.mapMessage)
+    }
+
+    public func sendScheduledNow(_ message: MessageID, in chat: ChatID) async throws(DomainError) {
+        try await run {
+            _ = try await self.client.editMessageSchedulingState(chatId: chat.rawValue, messageId: message.rawValue, schedulingState: nil)
+        }
+    }
+
+    public func deleteScheduled(_ messages: [MessageID], in chat: ChatID) async throws(DomainError) {
+        try await run { _ = try await self.client.deleteMessages(chatId: chat.rawValue, messageIds: messages.map(\.rawValue), revoke: true) }
     }
 
     // MARK: - Presence

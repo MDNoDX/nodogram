@@ -190,6 +190,22 @@ struct PrivacyPage: View {
                 Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.failure) }
             }
             Section {
+                Toggle("Lock Nodogram with Touch ID", isOn: Binding(
+                    get: { UserDefaults.standard.bool(forKey: AppLockSettings.enabledKey) },
+                    set: { UserDefaults.standard.set($0, forKey: AppLockSettings.enabledKey) }))
+                Picker("Lock after being away", selection: Binding(
+                    get: { AppLockSettings.afterMinutes },
+                    set: { UserDefaults.standard.set($0, forKey: AppLockSettings.afterKey) })) {
+                    Text("1 minute").tag(1)
+                    Text("5 minutes").tag(5)
+                    Text("1 hour").tag(60)
+                    Text("Only at launch and sleep").tag(0)
+                }
+                Button("Lock Now") { model.lockNow() }
+            } header: { Text("App lock") } footer: {
+                SettingsNote("Chats stay hidden until you unlock with Touch ID or your Mac's password. Nodogram keeps receiving messages while locked.")
+            }
+            Section {
                 Toggle("Hide message previews in notifications", isOn: Binding(
                     get: { UserDefaults.standard.bool(forKey: "notifications.privacyMode") },
                     set: { UserDefaults.standard.set($0, forKey: "notifications.privacyMode") }))
