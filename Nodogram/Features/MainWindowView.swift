@@ -59,21 +59,28 @@ public struct MainWindowView: View {
                 .frame(minWidth: 560, minHeight: 380)
 
             case .authenticating(let state):
-                AuthenticationView(
-                    state: state,
-                    errorMessage: model.authErrorMessage,
-                    isBusy: model.isBusy,
-                    onSubmitPhone: model.submitPhoneNumber,
-                    onSubmitCode: model.submitCode,
-                    onSubmitPassword: model.submitPassword
-                )
-                .overlay(alignment: .topLeading) {
+                ZStack(alignment: .topLeading) {
+                    AuthenticationView(
+                        state: state,
+                        errorMessage: model.authErrorMessage,
+                        isBusy: model.isBusy,
+                        onSubmitPhone: model.submitPhoneNumber,
+                        onSubmitCode: model.submitCode,
+                        onSubmitPassword: model.submitPassword
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     if model.accountBeforeAdding != nil {
-                        Button("Cancel") { model.cancelAddingAccount() }
-                            .padding(16)
-                            .help("Go back to \(Accounts.name(model.accountBeforeAdding ?? ""))")
+                        Button {
+                            model.cancelAddingAccount()
+                        } label: {
+                            Label("Back to \(Accounts.name(model.accountBeforeAdding ?? ""))", systemImage: "chevron.left")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.accent)
+                        .padding(16)
                     }
                 }
+                .frame(minWidth: 460, minHeight: 360)
 
             case .ready:
                 mainLayout

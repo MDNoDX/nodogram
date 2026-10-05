@@ -17,6 +17,9 @@ struct AssistantSheet: View {
     @State private var question = ""
     @State private var answer: String?
     @State private var asking = false
+    @State private var goal = ""
+    @State private var composed: String?
+    @State private var composing = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -62,10 +65,16 @@ struct AssistantSheet: View {
             gauge("Warmth", a.warmth, "heart.fill", .pink)
             gauge("Interest", a.interest, "bolt.fill", .orange)
         }
+        card("Summary", a.summary)
         card("How they feel", a.theirAttitude)
+        if let trend = a.interestTrend, !trend.isEmpty { card("Interest trend", trend) }
         card("Your relationship", a.relationship)
+        if let p = a.personality, !p.isEmpty { card("Who they seem to be", p) }
+        if let c = a.communicationPattern, !c.isEmpty { card("How they communicate", c) }
         card("How they write", a.theirStyle)
         if let stats { localFacts(stats) }
+        if let green = a.greenFlags, !green.isEmpty { list("Good signs", green, "checkmark.seal.fill", Theme.success) }
+        if let watch = a.watchOuts, !watch.isEmpty { list("Worth noting", watch, "exclamationmark.triangle.fill", Theme.warning) }
         if !a.openLoops.isEmpty { list("Waiting for your reply", a.openLoops, "arrow.turn.down.right", Theme.accent) }
         if !a.topics.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
@@ -76,6 +85,39 @@ struct AssistantSheet: View {
         if !a.advice.isEmpty { list("Advice", a.advice, "lightbulb.fill", .yellow) }
         Text("Read \(a.messageCount) messages · \(a.analyzedAt.formatted(date: .abbreviated, time: .shortened))")
             .font(.system(size: 10.5)).foregroundStyle(.tertiary)
+
+        if let memory = a.memory, !memory.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("REMEMBERED", systemImage: "brain").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.secondary)
+                ForEach(memory, id: \.self) { item in
+                    HStack(alignment: .top, spacing: 6) {
+                        Circle().fill(Theme.accent).frame(width: 4, height: 4).padding(.top, 6)
+                        Text(item).font(.system(size: 12.5)).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Text("Kept on this Mac and carried into every analysis and reply.").font(.system(size: 10.5)).foregroundStyle(.tertiary)
+            }
+            .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        }
+
+        Divider()
+        VStack(alignment: .leading, spacing: 8) {
+            Text("WRITE A REPLY FOR ME").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.secondary)
+            HStack {
+                TextField("Your goal, e.g. propose meeting Saturday", text: $goal).textFieldStyle(.roundedBorder).onSubmit(compose)
+                Button(composing ? "…" : "Write") { compose() }.disabled(goal.isEmpty || composing)
+            }
+            if let composed {
+                Text(composed).font(.system(size: 13)).textSelection(.enabled)
+                    .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                HStack {
+                    Spacer()
+                    Button("Put in Composer") { model.draftText = composed ?? ""; dismiss() }.controlSize(.small).buttonStyle(.borderedProminent)
+                }
+            }
+        }
 
         Divider()
         VStack(alignment: .leading, spacing: 8) {
@@ -157,6 +199,16 @@ struct AssistantSheet: View {
     }
 
     private func refresh() { Task { await load(force: true) } }
+
+    private func compose() {
+        let g = goal
+        composing = true; composed = nil
+        Task {
+            do { composed = try await model.composeReply(goal: g) }
+            catch { composed = (error as? AIError)?.errorDescription ?? error.localizedDescription }
+            composing = false
+        }
+    }
 
     private func ask() {
         let q = question

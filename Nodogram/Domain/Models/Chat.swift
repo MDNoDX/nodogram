@@ -121,6 +121,9 @@ public struct Chat: Identifiable, Hashable, Sendable {
     /// "mark as unread" flag that has no count attached.
     public var appearsUnread: Bool { unreadCount > 0 || isMarkedAsUnread }
 
+    /// In the Archive list (and not in the main list).
+    public var isArchived: Bool { archiveOrder != 0 && order == 0 }
+
     /// Group-like chats show the sender name in the list preview; private ones
     /// do not, because it would just repeat the chat title.
     public var showsSenderInPreview: Bool {

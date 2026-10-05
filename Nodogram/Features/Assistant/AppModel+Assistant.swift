@@ -21,6 +21,15 @@ public struct AssistantAnalysis: Codable, Sendable {
     public var advice: [String]
     public var analyzedAt: Date
     public var messageCount: Int
+    // Added for depth; optional so older saved analyses still decode.
+    public var personality: String?
+    public var communicationPattern: String?
+    public var interestTrend: String?
+    public var greenFlags: [String]?
+    public var watchOuts: [String]?
+    /// Durable facts the assistant remembers about this person, carried into
+    /// every later analysis and reply — the "memory," kept on this Mac.
+    public var memory: [String]?
 }
 
 /// Facts computed on this Mac, without any AI.
@@ -158,39 +167,54 @@ extension AppModel {
         guard history.count >= 4 else { throw AIError.unavailable("There isn't enough conversation yet to analyse.") }
         let isGroup = chatID.rawValue < 0
         let stats = Self.stats(history)
+        let strOf: (String) -> [String: String] = { _ in ["type": "STRING"] }
+        _ = strOf
+        let arr: [String: Any] = ["type": "ARRAY", "items": ["type": "STRING"]]
         let schema: [String: Any] = ["type": "OBJECT", "properties": [
             "summary": ["type": "STRING"], "relationship": ["type": "STRING"], "theirAttitude": ["type": "STRING"],
+            "personality": ["type": "STRING"], "communicationPattern": ["type": "STRING"], "interestTrend": ["type": "STRING"],
             "warmth": ["type": "INTEGER"], "interest": ["type": "INTEGER"], "theirStyle": ["type": "STRING"],
-            "topics": ["type": "ARRAY", "items": ["type": "STRING"]],
-            "openLoops": ["type": "ARRAY", "items": ["type": "STRING"]],
-            "advice": ["type": "ARRAY", "items": ["type": "STRING"]],
-        ], "required": ["summary", "relationship", "theirAttitude", "warmth", "interest", "theirStyle", "topics", "openLoops", "advice"]]
+            "topics": arr, "openLoops": arr, "advice": arr, "greenFlags": arr, "watchOuts": arr, "memory": arr,
+        ], "required": ["summary", "relationship", "theirAttitude", "personality", "communicationPattern", "interestTrend",
+                        "warmth", "interest", "theirStyle", "topics", "openLoops", "advice", "greenFlags", "watchOuts", "memory"]]
+        let priorMemory = (assistantAnalyses[chatID.rawValue]?.memory ?? []).joined(separator: "; ")
         let system = """
-            You help the user ("Me") understand a person from their chat history. Be honest, specific and kind; \
-            ground every claim in the messages; never invent facts; say when evidence is thin. \
-            warmth (0-100): how warm and positive they are toward Me. interest (0-100): how engaged they seem \
-            (reply speed, effort, questions they ask). openLoops: questions or promises still waiting for a reply. \
-            advice: 2-4 concrete tips for talking with them. Write every field in \(answerLanguage).
+            You are a sharp, warm relationship and communication coach helping the user ("Me") truly understand \
+            another person from their real chat, and respond well — authentically, never manipulatively. \
+            Think like a thoughtful psychologist: read tone, effort, timing, initiative, emotional cues and how \
+            they change over time. Be honest and specific; ground every claim in the messages; flag guesses as \
+            guesses; say when evidence is thin. Never invent facts and never encourage deceiving or pressuring anyone.
+            Fields: warmth (0-100) how warm/positive they are toward Me; interest (0-100) how engaged they are \
+            (reply speed, effort, questions, who initiates); personality: their apparent character and what they \
+            value; communicationPattern: how they communicate (initiative, reply rhythm, emoji, directness); \
+            interestTrend: is their interest rising, steady or cooling, with evidence; greenFlags: positive signs; \
+            watchOuts: honest cautions or mixed signals; openLoops: questions/promises still waiting; advice: 3-5 \
+            concrete, kind, practical tips for Me; memory: 4-10 short durable facts worth remembering about this \
+            person (preferences, important events, boundaries, inside references) — merge and refine the earlier \
+            memory, keep what still matters, drop the stale. Write every field in \(answerLanguage).
             """
         let prompt = """
             \(isGroup ? "This is a group chat; analyse the group's attitude toward Me." : "This is a private chat between Me and Them.")
-            Facts computed locally: Me sent \(stats.mine), Them sent \(stats.theirs) messages; Me started \(stats.iStarted) \
-            conversations, Them \(stats.theyStarted); median reply time — Me \(Self.minutes(stats.myMedianReply)), \
-            Them \(Self.minutes(stats.theirMedianReply)).
+            \(priorMemory.isEmpty ? "" : "What you remembered before about this person: \(priorMemory)")
+            Local facts: Me sent \(stats.mine), Them sent \(stats.theirs) messages; Me started \(stats.iStarted) \
+            conversations, Them \(stats.theyStarted); median reply — Me \(Self.minutes(stats.myMedianReply)), \
+            Them \(Self.minutes(stats.theirMedianReply)); their most active hour: \(stats.theirActiveHour.map { "\($0):00" } ?? "unknown").
 
-            Conversation:
+            Conversation (oldest first):
             \(Self.transcript(history, isGroup: isGroup))
             """
         struct Raw: Decodable {
-            let summary, relationship, theirAttitude, theirStyle: String
+            let summary, relationship, theirAttitude, personality, communicationPattern, interestTrend, theirStyle: String
             let warmth, interest: Int
-            let topics, openLoops, advice: [String]
+            let topics, openLoops, advice, greenFlags, watchOuts, memory: [String]
         }
         let raw = try Self.decode(Raw.self, from: try await provider.generate(AIRequest(system: system, prompt: prompt, schema: schema)))
         let analysis = AssistantAnalysis(
             summary: raw.summary, relationship: raw.relationship, theirAttitude: raw.theirAttitude,
             warmth: min(max(raw.warmth, 0), 100), interest: min(max(raw.interest, 0), 100), theirStyle: raw.theirStyle,
-            topics: raw.topics, openLoops: raw.openLoops, advice: raw.advice, analyzedAt: Date(), messageCount: history.count)
+            topics: raw.topics, openLoops: raw.openLoops, advice: raw.advice, analyzedAt: Date(), messageCount: history.count,
+            personality: raw.personality, communicationPattern: raw.communicationPattern, interestTrend: raw.interestTrend,
+            greenFlags: raw.greenFlags, watchOuts: raw.watchOuts, memory: raw.memory)
         assistantAnalyses[chatID.rawValue] = analysis
         AssistantStore.save(assistantAnalyses)
         return (analysis, stats)
@@ -218,14 +242,48 @@ extension AppModel {
             "replies": ["type": "ARRAY", "items": ["type": "OBJECT", "properties": [
                 "text": ["type": "STRING"], "tone": ["type": "STRING"]], "required": ["text", "tone"]]],
         ], "required": ["replies"]]
+        let memory = (assistantAnalyses[chatID.rawValue]?.memory ?? []).joined(separator: "; ")
         let system = """
-            You suggest what Me could reply next. Write exactly like Me writes in this chat — same language, \
-            script, length, emoji habits and formality. Give 3 different options (e.g. short, warm, and one that \
-            moves the conversation forward). The tone label is 1-2 words in \(answerLanguage).
+            You are Me's reply coach. Suggest what Me could send next in this chat. Write exactly like Me writes \
+            here — same language, script, length, emoji habits and formality — so it sounds like Me, not a bot. \
+            Read the other person's mood and what they just said, and make each reply land well and move things \
+            forward naturally and honestly (never manipulative or fake). Give 3 genuinely different options \
+            (e.g. short and easy, warm and personal, and one that opens the next step). The tone label is 1-2 \
+            words in \(answerLanguage).
             """
-        let prompt = "Conversation (latest last):\n\(Self.transcript(history, isGroup: chatID.rawValue < 0))\n\nDraft so far: \(draftText.isEmpty ? "(empty)" : draftText)"
+        let prompt = """
+            \(memory.isEmpty ? "" : "What you remember about this person: \(memory)\n")\
+            Conversation (latest last):
+            \(Self.transcript(history, isGroup: chatID.rawValue < 0))
+
+            Me's draft so far: \(draftText.isEmpty ? "(empty)" : draftText)
+            """
         struct Raw: Decodable { let replies: [ReplySuggestion] }
         return try Self.decode(Raw.self, from: try await provider.generate(AIRequest(system: system, prompt: prompt, schema: schema, fast: true))).replies
+    }
+
+    /// Writes a full reply for a goal the user states ("set up a meeting",
+    /// "apologise warmly", "say no politely"), in Me's own voice.
+    public func composeReply(goal: String) async throws -> String {
+        guard let chatID = selectedChatID else { return "" }
+        if let reason = assistantAllowed(in: selectedChat) { throw AIError.unavailable(reason) }
+        let provider = try AssistantSettings.currentProvider()
+        let history = await assistantMessages(in: chatID, depth: 120)
+        let memory = (assistantAnalyses[chatID.rawValue]?.memory ?? []).joined(separator: "; ")
+        let system = """
+            You write one message for Me to send, in Me's exact style and language as seen in this chat. \
+            Honour Me's goal while fitting the conversation and the other person's mood. Be authentic, warm \
+            and natural — never robotic, manipulative or over-long. Reply with the message text only, no quotes, \
+            no explanation.
+            """
+        let prompt = """
+            \(memory.isEmpty ? "" : "What you remember about this person: \(memory)\n")\
+            Conversation (latest last):
+            \(Self.transcript(history, isGroup: chatID.rawValue < 0))
+
+            Me's goal for the reply: \(goal)
+            """
+        return AppleProvider.stripFences(try await provider.generate(AIRequest(system: system, prompt: prompt)))
     }
 
     // MARK: - Review before sending

@@ -55,6 +55,7 @@ struct DataStoragePage: View {
     @State private var usage: StorageUsage?
     @State private var confirmingClear = false
     @State private var clearing = false
+    @State private var confirmClearGIFs = false
 
     var body: some View {
         SettingsForm {
@@ -89,11 +90,15 @@ struct DataStoragePage: View {
                     }
                 }
                 Toggle("Also copy every downloaded file here", isOn: $autoSave)
+                Button("Clear All Saved GIFs…") { confirmClearGIFs = true }
             } header: { Text("Downloads") } footer: {
                 SettingsNote("“Save” and “Show in Finder” copy files here. Media in chats that forbid saving is never copied. Use “Save As…” on any file to pick a place each time.")
             }
         }
         .task { usage = await model.storageUsage() }
+        .confirmationDialog("Clear all saved GIFs?", isPresented: $confirmClearGIFs, titleVisibility: .visible) {
+            Button("Clear GIFs", role: .destructive) { Task { _ = await model.clearSavedGIFs() } }
+        } message: { Text("Removes every GIF from your saved GIFs on Telegram, on all your devices.") }
         .confirmationDialog("Clear the media cache?", isPresented: $confirmingClear, titleVisibility: .visible) {
             Button("Clear Cache", role: .destructive) {
                 clearing = true
@@ -343,6 +348,7 @@ struct FeaturesPage: View {
     @AppStorage(TrackerSettings.typingNotifyKey) private var typingNotify = true
     @AppStorage(TrackerSettings.typingAbandonedNotifyKey) private var abandonedNotify = true
     @AppStorage(TrackerSettings.storyViewsNotifyKey) private var storyNotify = true
+    @State private var confirmClearStories = false
     @AppStorage(TrackerSettings.keywordsKey) private var keywords = ""
     @AppStorage(TrackerSettings.streamerModeKey) private var streamerMode = false
     @State private var stats: MessageArchive.Statistics?
@@ -424,8 +430,9 @@ struct FeaturesPage: View {
             Section {
                 Toggle("Notify when someone views my story", isOn: $storyNotify)
                 LabeledContent("Viewers kept", value: "\(model.storyViewers.count)")
-                Button("Clear Story Viewers", role: .destructive) { model.clearStoryViewers() }
+                Button("Clear Story Viewers (on this Mac)", role: .destructive) { model.clearStoryViewers() }
                     .disabled(model.storyViewers.isEmpty)
+                Button("Delete All My Active Stories…", role: .destructive) { confirmClearStories = true }
             } header: { Label("Story views", systemImage: "eye.circle") } footer: {
                 SettingsNote("Telegram lists viewers only while a story is live. Nodogram checks every minute while it runs and keeps the list for good.")
             }
@@ -451,6 +458,9 @@ struct FeaturesPage: View {
                 }
             }
         } message: { Text("Every kept deleted message and edit history is removed from this Mac.") }
+        .confirmationDialog("Delete all your active stories?", isPresented: $confirmClearStories, titleVisibility: .visible) {
+            Button("Delete Stories", role: .destructive) { Task { _ = await model.clearMyStories() } }
+        } message: { Text("Removes every story you have posted that is still active, for everyone.") }
     }
 
     private func refresh() async {

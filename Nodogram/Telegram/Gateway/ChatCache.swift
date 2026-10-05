@@ -360,6 +360,11 @@ final class ChatCache: @unchecked Sendable {
         return users[id]
     }
 
+    func isContact(_ id: Int64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return users[id]?.isContact ?? false
+    }
+
     static func displayName(_ user: TDLibKit.User) -> String { fullName(user) }
 
     func notificationSettings(chatId: Int64) -> ChatNotificationSettings? {

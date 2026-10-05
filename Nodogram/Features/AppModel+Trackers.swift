@@ -109,13 +109,20 @@ extension AppModel {
     func noteTyping(chatID: ChatID, user: UserID, activity: ChatActivity?) {
         let scope = TrackerSettings.typingScope
         guard scope != "off", let chat = chatsByID[chatID], user != myUserID, !chat.isBot else { return }
+        // Only what's relevant to you, and never from the Archive.
+        if chat.isArchived { return }
         let isGroup: Bool
         switch chat.kind {
-        case .privateChat, .secret: isGroup = false
-        case .basicGroup, .supergroup: isGroup = true
-        case .channel: return
+        case .privateChat, .secret:
+            // Someone writing directly to you — always worth knowing.
+            isGroup = false
+        case .basicGroup, .supergroup:
+            // In groups, only when the person typing is one of your contacts.
+            guard gateway?.userIsContact(user) == true else { return }
+            isGroup = true
+        case .channel:
+            return
         }
-        if isGroup, scope != "all" { return }
 
         let key = "\(chatID.rawValue)-\(user.rawValue)"
         let now = Date()

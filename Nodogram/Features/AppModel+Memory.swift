@@ -4,6 +4,7 @@
 //  "memories" archive. Each line is also a local notification.
 
 import Foundation
+import OSLog
 import NodogramDomain
 import NodogramPlatform
 
@@ -21,7 +22,12 @@ extension AppModel {
             if let last = archivedRecently[dedupe], now.timeIntervalSince(last) < 300 { return }
             archivedRecently[dedupe] = now
         }
-        Task { try? await gateway.sendText(text, to: channel, silent: true) }
+        Task { [weak self] in
+            await gateway.ensureChat(channel)
+            _ = self
+            do { try await gateway.sendText(text, to: channel, silent: true) }
+            catch { Logger(subsystem: "app.nodogram", category: "memory").error("channel archive failed: \(String(describing: error), privacy: .public)") }
+        }
     }
 
     // MARK: - Contact changes

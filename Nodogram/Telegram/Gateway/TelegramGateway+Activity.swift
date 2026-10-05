@@ -14,6 +14,8 @@ extension TelegramGateway {
         cache.user(id.rawValue).map(ChatCache.displayName)
     }
 
+    public func userIsContact(_ id: UserID) -> Bool { cache.isContact(id.rawValue) }
+
     /// Telegram's support account, as a private chat.
     public func supportChat() async -> ChatID? {
         guard let user = try? await client.getSupportUser(),
@@ -55,17 +57,36 @@ extension TelegramGateway {
         var deleted = 0
         var total = 0
         var rounds = 0
-        while rounds < 500 {
+        var from: MessageID?
+        while rounds < 1000 {
             rounds += 1
-            let page = try await myMessages(in: chat, from: nil, limit: 100)
+            let page = try await myMessages(in: chat, from: from, limit: 100)
             if total == 0 { total = page.total }
             let ids = page.messages.map(\.id.rawValue)
             guard !ids.isEmpty else { break }
-            try await run { _ = try await self.client.deleteMessages(chatId: chat.rawValue, messageIds: ids, revoke: true) }
-            deleted += ids.count
-            progress(deleted, max(total, deleted))
-            // Stay well inside Telegram's flood limits.
-            try? await Task.sleep(for: .milliseconds(400))
+            // Delete in small chunks; a chunk Telegram refuses (e.g. a message
+            // too old to revoke) is retried without revoke, then skipped, so
+            // one bad message never stops the rest.
+            for chunk in stride(from: 0, to: ids.count, by: 50).map({ Array(ids[$0..<min($0 + 50, ids.count)]) }) {
+                do {
+                    try await run { _ = try await self.client.deleteMessages(chatId: chat.rawValue, messageIds: chunk, revoke: true) }
+                    deleted += chunk.count
+                } catch {
+                    for id in chunk {
+                        var done = (try? await self.run { _ = try await self.client.deleteMessages(chatId: chat.rawValue, messageIds: [id], revoke: true) }) != nil
+                        if !done {
+                            done = (try? await self.run { _ = try await self.client.deleteMessages(chatId: chat.rawValue, messageIds: [id], revoke: false) }) != nil
+                        }
+                        if done { deleted += 1 }
+                        try? await Task.sleep(for: .milliseconds(60))
+                    }
+                }
+                progress(deleted, max(total, deleted))
+                try? await Task.sleep(for: .milliseconds(300))
+            }
+            // Page by the oldest id so deletions that TDLib hasn't yet reflected
+            // don't loop forever.
+            from = page.messages.map(\.id).min { $0.rawValue < $1.rawValue }
             if page.next == nil, ids.count < 100 { break }
         }
         return deleted
@@ -165,5 +186,33 @@ extension TelegramGateway {
             if offset.isEmpty { break }
         }
         return result
+    }
+}
+
+extension TelegramGateway {
+
+    /// Removes every saved GIF. Returns how many were cleared.
+    public func clearSavedGIFs() async throws(DomainError) -> Int {
+        try await run {
+            let saved = try await self.client.getSavedAnimations().animations
+            for gif in saved {
+                let remote = gif.animation.remote.id; if !remote.isEmpty {
+                    _ = try? await self.client.removeSavedAnimation(animation: .inputFileRemote(InputFileRemote(id: remote)))
+                }
+            }
+            return saved.count
+        }
+    }
+
+    /// Deletes all of your own currently active stories. Returns how many.
+    public func clearMyStories() async throws(DomainError) -> Int {
+        let me = try await myUserID()
+        return try await run {
+            guard let active = try? await self.client.getChatActiveStories(chatId: me.rawValue) else { return 0 }
+            for story in active.stories {
+                _ = try? await self.client.deleteStory(storyId: story.storyId, storyPosterChatId: me.rawValue)
+            }
+            return active.stories.count
+        }
     }
 }

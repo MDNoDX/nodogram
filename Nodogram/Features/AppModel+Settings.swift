@@ -113,4 +113,14 @@ extension AppModel {
         do { try await gateway?.setProfilePhoto(path: path); return nil }
         catch { return error.userFacingDescription }
     }
+
+    public func clearSavedGIFs() async -> String? {
+        do { let n = try await gateway?.clearSavedGIFs() ?? 0; showToast("Cleared \(n) saved GIFs"); return nil }
+        catch { return error.userFacingDescription }
+    }
+
+    public func clearMyStories() async -> String? {
+        do { let n = try await gateway?.clearMyStories() ?? 0; showToast(n == 0 ? "No active stories" : "Deleted \(n) stories"); return nil }
+        catch { return error.userFacingDescription }
+    }
 }
