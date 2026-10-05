@@ -380,8 +380,8 @@ struct FeaturesPage: View {
                     is closed: Telegram holds the bot's updates for 24 hours, and the Vault service on this Mac \
                     collects them. When someone deletes or edits a message, the bot sends it to you at once — \
                     on your phone too — and it appears here in that chat and under Deleted, photos and voice included. \
-                    To connect: in @BotFather turn on Business Mode for the bot, press Start in the bot, then \
-                    Telegram → Settings → Telegram Business → Chatbots → add the bot for all 1-to-1 chats.
+                    To connect: in @BotFather → Bot Settings turn on Secretary Mode, press Start in the bot, then \
+                    Telegram → Settings → Account → Chat automation → add the bot for all 1-to-1 chats.
                     """)
             }
 

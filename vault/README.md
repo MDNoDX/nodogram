@@ -33,10 +33,12 @@ copy-protected media is never copied.
 
 2. `createdb -h 127.0.0.1 nodogram_vault`, then `vault/scripts/install.sh`
    (a LaunchAgent: starts at login, restarts if it stops).
-3. In **@BotFather** → your bot → Bot Settings → **Business Mode** → On.
+3. In **@BotFather** → /mybots → your bot → Bot Settings → **Secretary Mode** → Enable
+   (formerly “Business Mode”; in BotFather's Open panel: bot → Settings → Mode Settings).
 4. Open the bot and press **Start** (bots cannot message you first).
-5. Telegram → Settings → **Telegram Business** → **Chatbots** → add the bot,
-   for all 1-to-1 chats. It needs no permission to reply.
+5. Telegram → Settings → **Account** → **Chat automation** (older apps:
+   Telegram Business → Chatbots) → add the bot for all 1-to-1 chats. No
+   Premium is needed, and the bot needs no permission to reply.
 
 Bot commands: `/status`, `/deleted [n]`, `/search words`.
 

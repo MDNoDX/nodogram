@@ -176,7 +176,7 @@ export class Vault {
         return this.notify(
           "👋 <b>Nodogram Vault</b>\n" +
           "I keep the messages people send you in private chats. When someone deletes or edits one, I show you what it said — text, photos, voice and files.\n\n" +
-          "<b>Set up:</b> Telegram → Settings → Telegram Business → Chatbots → add this bot, for all 1-to-1 chats.\n\n" +
+          "<b>Set up:</b> Telegram → Settings → Account → Chat automation (older apps: Telegram Business → Chatbots) → add this bot for all 1-to-1 chats.\n\n" +
           "/status — what's kept\n/deleted — the latest deletions\n/search <i>words</i> — search kept messages");
       case "/status": {
         const s = await this.db.stats();

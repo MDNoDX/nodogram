@@ -38,6 +38,11 @@ cat > "$PLIST" <<PLIST
 </plist>
 PLIST
 
+# Replace a running copy: wait for the old one to stop before loading.
 launchctl bootout "gui/$(id -u)/app.nodogram.vault" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+for _ in {1..20}; do
+  launchctl print "gui/$(id -u)/app.nodogram.vault" >/dev/null 2>&1 || break
+  sleep 0.5
+done
+launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || { sleep 2; launchctl bootstrap "gui/$(id -u)" "$PLIST"; }
 echo "Nodogram Vault installed and running. Log: $LOGS/vault.log"

@@ -17,7 +17,7 @@ const db = new VaultDB(config.databaseUrl);
 await db.migrate();
 const bot = new BotAPI(config.botToken);
 const me = await bot.call("getMe");
-log.info(`[vault] running as @${me.username}; business mode ${me.can_connect_to_business ? "on" : "OFF — turn it on in @BotFather"}`);
+log.info(`[vault] running as @${me.username}; Secretary Mode ${me.can_connect_to_business ? "on" : "OFF — turn it on in @BotFather (Bot Settings → Secretary Mode)"}`);
 
 const vault = new Vault({ config, db, bot, log });
 const server = startAPI({ config, db, log });
