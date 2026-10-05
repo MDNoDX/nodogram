@@ -62,7 +62,7 @@ export function ChatList({
   }, [chats, destination, search, draftChatIds]);
 
   return (
-    <div className="flex h-full w-80 shrink-0 flex-col border-r border-border bg-bg-list">
+    <div className="flex h-full w-full shrink-0 flex-col border-r border-border bg-bg-list md:w-80">
       <div className="p-2.5">
         <div className="relative">
           <span className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-tertiary">

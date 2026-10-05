@@ -66,11 +66,19 @@ EXECUTABLE="$BIN_PATH/NodogramApp"
 [ -x "$EXECUTABLE" ] || { echo "error: executable not found at $EXECUTABLE" >&2; exit 1; }
 
 # ── Icon ─────────────────────────────────────────────────────────────────────
+# Built from the committed 1024 px master (Tools/icon/make_icon.swift draws
+# it) with macOS's own tools, whenever the master is newer than the icns.
 ICNS="$ROOT/Tools/icon/$APP_NAME.icns"
-if [ ! -f "$ICNS" ]; then
+MASTER="$ROOT/Tools/icon/AppIcon-1024.png"
+if [ ! -f "$ICNS" ] || [ "$MASTER" -nt "$ICNS" ]; then
   say "Generating app icon"
-  python3 "$ROOT/Tools/icon/make_icon.py" "$ROOT/Tools/icon/$APP_NAME.iconset" >/dev/null
-  iconutil -c icns "$ROOT/Tools/icon/$APP_NAME.iconset" -o "$ICNS"
+  SET="$ROOT/Tools/icon/$APP_NAME.iconset"
+  rm -rf "$SET"; mkdir -p "$SET"
+  for px in 16 32 128 256 512; do
+    sips -z $px $px "$MASTER" --out "$SET/icon_${px}x${px}.png" >/dev/null
+    sips -z $((px * 2)) $((px * 2)) "$MASTER" --out "$SET/icon_${px}x${px}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$SET" -o "$ICNS"
 fi
 
 # ── Assemble the bundle ──────────────────────────────────────────────────────

@@ -67,6 +67,13 @@ public struct MainWindowView: View {
                     onSubmitCode: model.submitCode,
                     onSubmitPassword: model.submitPassword
                 )
+                .overlay(alignment: .topLeading) {
+                    if model.accountBeforeAdding != nil {
+                        Button("Cancel") { model.cancelAddingAccount() }
+                            .padding(16)
+                            .help("Go back to \(Accounts.name(model.accountBeforeAdding ?? ""))")
+                    }
+                }
 
             case .ready:
                 mainLayout

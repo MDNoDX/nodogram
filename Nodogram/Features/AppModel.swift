@@ -167,7 +167,7 @@ public final class AppModel {
     // MARK: Private
 
     var gateway: TelegramGateway?
-    private var eventTask: Task<Void, Never>?
+    var eventTask: Task<Void, Never>?
     private var draftSaveTask: Task<Void, Never>?
     private var exhaustedLists: Set<ChatListKind> = []
     private var requestedAvatars: Set<ChatID> = []
@@ -213,6 +213,12 @@ public final class AppModel {
     var pendingTranslations: Set<String> = []
     /// Set by the ⋯ menu; the conversation shows the summary sheet.
     public var summaryRequested = false
+    /// Bumped when accounts change, so lists redraw.
+    public internal(set) var accountsVersion = 0
+    /// The account to return to if an Add Account sign-in is cancelled.
+    public internal(set) var accountBeforeAdding: String?
+    var isSwitchingAccount = false
+    var isSigningOut = false
     /// Nodogram Vault's state, when it runs on this Mac.
     public internal(set) var vaultStatus: VaultStatus?
     var presenceObservers: [any NSObjectProtocol] = []
@@ -309,7 +315,7 @@ public final class AppModel {
                 applyAuthorizationState(state)
             }
         } catch DomainError.notAuthorized where masterKey != nil
-                    && UserDefaults.standard.bool(forKey: "tdlib.databaseEncrypted.default") {
+                    && UserDefaults.standard.bool(forKey: Accounts.encryptedFlagKey) {
             // TDLib's answer to a database key that doesn't match. The session
             // is intact; never present this as "signed out".
             phase = .storageLocked(detail: "The database key from the Keychain doesn't match the saved session.")
@@ -447,8 +453,14 @@ public final class AppModel {
             authErrorMessage = nil
             startChatSync()
         case .closed, .loggingOut, .closing:
+            // Closing to switch accounts is not a sign-out.
+            if isSwitchingAccount { return }
             phase = .authenticating(.waitingForPhoneNumber)
             resetSessionState()
+            if state == .closed, isSigningOut {
+                isSigningOut = false
+                accountSignedOut()
+            }
         default:
             // Keep `.ready` sticky against a late `waitingForParameters`, which
             // would otherwise bounce a signed-in user back to the login screen.
@@ -456,6 +468,8 @@ public final class AppModel {
             phase = .authenticating(state)
         }
     }
+
+    func clearSessionForSwitch() { resetSessionState() }
 
     private func resetSessionState() {
         chatsByID = [:]
@@ -486,6 +500,7 @@ public final class AppModel {
         Task { [weak self] in
             guard let me = try? await gateway.myUserID() else { return }
             self?.myUserID = me
+            if let profile = try? await gateway.profile() { self?.rememberAccountName(profile.displayName) }
             // "Saved" must work even when Saved Messages is not among the
             // chats loaded so far.
             await gateway.ensurePrivateChat(with: me)
@@ -971,6 +986,7 @@ public final class AppModel {
     }
 
     public func signOut() {
+        isSigningOut = true
         performAuthStep { gateway in try await gateway.logOut() }
     }
 
@@ -1046,7 +1062,7 @@ public final class AppModel {
             masterKey = key
             return true
         }
-        let encrypted = UserDefaults.standard.bool(forKey: "tdlib.databaseEncrypted.default")
+        let encrypted = UserDefaults.standard.bool(forKey: Accounts.encryptedFlagKey)
         do {
             if encrypted {
                 guard let key = try KeychainKey.load(service: "app.nodogram.tdlib", account: "default") else {
@@ -1071,7 +1087,7 @@ public final class AppModel {
 
     private func initializeEncrypted(_ gateway: TelegramGateway, credentials: TelegramCredentials,
                                      directories: AccountDirectories) async throws {
-        let migratedKey = "tdlib.databaseEncrypted.default"
+        let migratedKey = Accounts.encryptedFlagKey
         guard let master = masterKey else {
             try await gateway.initialize(credentials: credentials, databaseDirectory: directories.database,
                                          filesDirectory: directories.files)
@@ -1115,7 +1131,7 @@ public final class AppModel {
         let root = support
             .appendingPathComponent("Nodogram", isDirectory: true)
             .appendingPathComponent("accounts", isDirectory: true)
-            .appendingPathComponent("default", isDirectory: true)
+            .appendingPathComponent(Accounts.active, isDirectory: true)
         let database = root.appendingPathComponent("tdlib", isDirectory: true)
         let files = root.appendingPathComponent("files", isDirectory: true)
         try FileManager.default.createDirectory(at: database, withIntermediateDirectories: true)

@@ -24,6 +24,15 @@ struct SettingsListView: View {
                     if query.isEmpty {
                         profileCard
                         VStack(spacing: 2) {
+                            let _ = model.accountsVersion
+                            ForEach(model.accountIDs, id: \.self) { id in
+                                if id != model.activeAccountID {
+                                    actionRow("Switch to \(Accounts.name(id))", symbol: "person.crop.circle") {
+                                        model.switchAccount(to: id)
+                                    }
+                                }
+                            }
+                            actionRow("Add Account", symbol: "person.badge.plus") { model.addAccount() }
                             actionRow("Ask a Question", symbol: "questionmark.bubble") { model.openSupportChat() }
                             actionRow("Telegram FAQ", symbol: "book") {
                                 if let url = URL(string: "https://telegram.org/faq") { NSWorkspace.shared.open(url) }

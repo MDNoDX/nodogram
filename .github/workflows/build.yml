@@ -71,15 +71,6 @@ jobs:
             exit 1
           }
 
-      # The icon is generated from Tools/icon/make_icon.py (the .icns is not
-      # committed), which needs Pillow.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install the icon generator's dependency
-        run: python -m pip install --quiet pillow
-
       - name: Assemble the app bundle
         # No credentials in CI: the app builds and launches, showing its setup
         # screen. Credentials belong on the developer's machine only.

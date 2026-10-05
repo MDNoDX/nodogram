@@ -35,6 +35,19 @@ public struct NodogramCommands: Commands {
                 .disabled(model == nil)
         }
 
+        CommandMenu("Account") {
+            if let model {
+                let _ = model.accountsVersion
+                ForEach(model.accountIDs, id: \.self) { id in
+                    Button((id == model.activeAccountID ? "✓ " : "") + Accounts.name(id)) { model.switchAccount(to: id) }
+                }
+                Divider()
+                Button("Add Account…") { model.addAccount() }
+                Button("Lock Now") { model.lockNow() }
+                    .keyboardShortcut("l", modifiers: [.command, .control])
+            }
+        }
+
         CommandMenu("Chat") {
             Button("Find in Conversation…") { model?.beginConversationSearch() }
                 .keyboardShortcut("f", modifiers: .command)

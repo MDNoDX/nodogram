@@ -57,7 +57,7 @@ export function Sidebar({
 
   return (
     <nav
-      className="flex h-full w-56 shrink-0 flex-col border-r border-border bg-bg-sidebar"
+      className="hidden h-full w-56 shrink-0 flex-col border-r border-border bg-bg-sidebar md:flex"
       aria-label="Sections"
     >
       <div className="flex items-center gap-2 px-3.5 py-3.5">

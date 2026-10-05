@@ -428,6 +428,8 @@ export default function Home() {
         onSignOut={signOut}
       />
 
+      {/* Phones show one pane at a time: the list, or the open chat. */}
+      <div className={`${selectedChat ? 'hidden md:flex' : 'flex'} h-full w-full md:w-auto`}>
       <ChatList
         chats={chats}
         destination={destination}
@@ -438,8 +440,17 @@ export default function Home() {
         loading={chatsLoading}
         draftChatIds={draftChatIds}
       />
+      </div>
 
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className={`${selectedChat ? 'flex' : 'hidden md:flex'} min-w-0 flex-1 flex-col`}>
+        {selectedChat && (
+          <button
+            onClick={() => setSelectedChatId(undefined)}
+            className="flex items-center gap-1 border-b border-border px-3 py-2 text-left text-sm text-accent md:hidden"
+          >
+            ‹ Chats
+          </button>
+        )}
         <Conversation chat={selectedChat} messages={messages} loading={messagesLoading} />
 
         {selectedChat && (
