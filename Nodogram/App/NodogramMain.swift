@@ -25,15 +25,60 @@ struct NodogramMain: App {
         .defaultLaunchBehavior(.presented)
         .commands { NodogramCommands() }
 
+        // A light menu bar item: a static icon (no reactive binding, so no
+        // render loop) whose menu can reopen the window and captures the
+        // openWindow action for the Dock-reopen path.
+        MenuBarExtra {
+            Button("Open Nodogram") { WindowOpener.shared.show() }
+            Divider()
+            Button("Settings…") { AppModel.shared.selectedDestination = .settings; WindowOpener.shared.show() }
+            Button("Quit Nodogram") { NSApp.terminate(nil) }
+        } label: {
+            // A plain icon captures the openWindow action (needed to reopen a
+            // closed window) without binding to any observable, so no render loop.
+            MenuBarLabel()
+        }
+    }
+}
+
+/// The static menu bar icon; records how to open the main window.
+private struct MenuBarLabel: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Image(systemName: "bubble.left.and.text.bubble.right")
+            .onAppear { WindowOpener.shared.open = { openWindow(id: "main") } }
+    }
+}
+
+/// Holds the SwiftUI openWindow action so AppKit paths (Dock reopen) can
+/// bring the window back when none exists.
+@MainActor
+final class WindowOpener {
+    static let shared = WindowOpener()
+    var open: (() -> Void)?
+
+    func show() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = NSApp.windows.first(where: { $0.styleMask.contains(.titled) && $0.canBecomeMain }) {
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            open?()
+        }
+    }
+
+    /// Keeps trying until a real window exists — the opener action may not be
+    /// captured the instant the app launches window-less.
+    func ensureWindow(attempt: Int = 0) {
+        if NSApp.windows.contains(where: { $0.styleMask.contains(.titled) && $0.canBecomeMain && ($0.frame.height > 200) }) { return }
+        show()
+        guard attempt < 8 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.ensureWindow(attempt: attempt + 1) }
     }
 }
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isTerminating = false
-    private let statusItem = StatusItemController()
-    private var defaultsObserver: NSObjectProtocol?
-
     /// Closing the window keeps Nodogram running in the menu bar (unless the
     /// user turned that off), so updates keep arriving.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -58,18 +103,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Clicking the Dock icon (or reopening) always brings a window back,
     /// even when the app was running window-less in the menu bar.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { showMainWindow() }
+        if !flag { WindowOpener.shared.show() }
         return true
-    }
-
-    private func showMainWindow() {
-        NSApp.activate(ignoringOtherApps: true)
-        if let window = NSApp.windows.first(where: { $0.canBecomeMain && $0.contentView != nil && $0.styleMask.contains(.titled) }) {
-            window.makeKeyAndOrderFront(nil)
-        } else {
-            // No window exists: ask SwiftUI to open the main scene.
-            NSApp.sendAction(Selector(("newWindowForTab:")), to: nil, from: nil)
-        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -77,18 +112,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // front: macOS already activates an app the user opens, and stealing
         // focus from whatever they are doing is never acceptable.
         NSApp.setActivationPolicy(.regular)
-        updateStatusItem()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            if !NSApp.windows.contains(where: { $0.styleMask.contains(.titled) && $0.isVisible }) { self?.showMainWindow() }
-        }
-        defaultsObserver = NotificationCenter.default.addObserver(
-            forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateStatusItem() }
-        }
+        // Ensure a window is visible shortly after launch (retries, since the
+        // opener action is captured once the menu bar label renders).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { WindowOpener.shared.ensureWindow() }
     }
 
-    func updateStatusItem() {
-        let show = UserDefaults.standard.object(forKey: BackgroundSettings.menuBarIconKey) as? Bool ?? true
-        if show { statusItem.install() } else { statusItem.remove() }
-    }
 }
