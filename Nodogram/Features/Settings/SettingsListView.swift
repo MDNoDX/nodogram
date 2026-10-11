@@ -33,6 +33,9 @@ struct SettingsListView: View {
                                 }
                             }
                             actionRow("Add Account", symbol: "person.badge.plus") { model.addAccount() }
+                            actionRow("Get Telegram Premium", symbol: "star.circle.fill") {
+                                if let url = URL(string: "https://t.me/PremiumBot") { NSWorkspace.shared.open(url) }
+                            }
                             actionRow("Ask a Question", symbol: "questionmark.bubble") { model.openSupportChat() }
                             actionRow("Telegram FAQ", symbol: "book") {
                                 if let url = URL(string: "https://telegram.org/faq") { NSWorkspace.shared.open(url) }

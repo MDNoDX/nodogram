@@ -64,10 +64,16 @@ public struct ConversationView: View {
                         Divider()
                         ChatInfoPanel(model: model, chat: chat)
                             .transition(.move(edge: .trailing))
+                    } else if model.assistantPanelVisible {
+                        Divider()
+                        AssistantSheet(model: model, chat: chat, embedded: true)
+                            .id(chat.id)
+                            .transition(.move(edge: .trailing))
                     }
                 }
                 .animation(.easeOut(duration: 0.18), value: model.comments?.postMessageID)
                 .animation(.easeOut(duration: 0.18), value: model.infoPanelVisible)
+                .animation(.easeOut(duration: 0.18), value: model.assistantPanelVisible)
 
                 if let error = model.conversationError {
                     ErrorBanner(message: error, onDismiss: model.dismissConversationError)
@@ -245,6 +251,7 @@ private struct ConversationHeader: View {
                 ProgressView().controlSize(.small)
                 Text("Exporting \(progress)…").font(.system(size: 11)).foregroundStyle(.secondary)
             }
+            HeaderButton(symbol: "sparkles", help: "AI Assistant") { model.assistantPanelVisible.toggle(); if model.assistantPanelVisible { model.infoPanelVisible = false } }
             HeaderButton(symbol: "magnifyingglass", help: "Search (⌘F)") { model.beginConversationSearch() }
             HeaderButton(symbol: model.infoPanelVisible ? "sidebar.right" : "info.circle", help: "Info") {
                 model.infoPanelVisible.toggle()

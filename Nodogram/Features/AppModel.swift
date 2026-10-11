@@ -222,6 +222,8 @@ public final class AppModel {
     public var assistantChatRequested = false
     /// The global-search overlay, when open.
     public var globalSearch: GlobalSearchState?
+    /// The docked AI panel beside a conversation.
+    public var assistantPanelVisible = false
     /// Bumped when accounts change, so lists redraw.
     public internal(set) var accountsVersion = 0
     /// The account to return to if an Add Account sign-in is cancelled.

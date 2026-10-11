@@ -8,6 +8,7 @@ import NodogramUI
 struct AssistantSheet: View {
     let model: AppModel
     let chat: Chat
+    var embedded = false
 
     @Environment(\.dismiss) private var dismiss
     @State private var analysis: AssistantAnalysis?
@@ -29,7 +30,10 @@ struct AssistantSheet: View {
                 if analysis != nil {
                     Button { refresh() } label: { Image(systemName: "arrow.clockwise") }.help("Analyse again")
                 }
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button { if embedded { model.assistantPanelVisible = false } else { dismiss() } } label: {
+                    Image(systemName: embedded ? "xmark.circle.fill" : "xmark").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain).keyboardShortcut(.cancelAction)
             }
             .padding(14)
             Divider()
@@ -55,7 +59,9 @@ struct AssistantSheet: View {
                 .padding(16)
             }
         }
-        .frame(width: 460, height: 620)
+        .frame(width: embedded ? 400 : 460, height: embedded ? nil : 620)
+        .frame(maxHeight: .infinity)
+        .background(embedded ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor)) : AnyShapeStyle(.clear))
         .task { if analysis == nil { await load(force: false) } }
     }
 
@@ -114,7 +120,7 @@ struct AssistantSheet: View {
                     .background(Theme.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
                 HStack {
                     Spacer()
-                    Button("Put in Composer") { model.draftText = composed ?? ""; dismiss() }.controlSize(.small).buttonStyle(.borderedProminent)
+                    Button("Put in Composer") { model.draftText = composed ?? ""; if !embedded { dismiss() } }.controlSize(.small).buttonStyle(.borderedProminent)
                 }
             }
         }
