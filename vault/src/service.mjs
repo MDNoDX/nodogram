@@ -22,6 +22,7 @@ export class Vault {
     this.ownerConnections = new Map();   // connection id → is owner's
     this.running = false;
     this.ai = config.geminiKey ? new Gemini(config.geminiKey) : null;
+    this.agentHistory = [];   // Gemini contents for the ongoing conversation
   }
 
   // ── Polling ───────────────────────────────────────────────────────────────
@@ -200,7 +201,13 @@ export class Vault {
           "👋 <b>Nodogram Vault</b>\n" +
           "I keep the messages people send you in private chats. When someone deletes or edits one, I show you what it said — text, photos, voice and files.\n\n" +
           "<b>Set up:</b> Telegram → Settings → Account → Chat automation (older apps: Telegram Business → Chatbots) → add this bot for all 1-to-1 chats.\n\n" +
-          "<b>AI</b>\n/ai <i>question</i> — ask anything about your chats\n/analyze <i>name</i> — understand a person deeply\n/draft <i>name | goal</i> — write a reply in your style\n\n<b>Archive</b>\n/chats · /status · /deleted · /search <i>words</i>");
+          "Just write to me in plain language — I control your Telegram:\n\n" +
+          "• “Hasan bilan chatimni tahlil qil, nima deb o'ylaysan?”\n" +
+          "• “@username kim, ma'lumot ber”\n" +
+          "• “Aliga shanbaga uchrashuv taklif qilib yoz”\n" +
+          "• “kim nimani o'chirdi?”, “kim menga yozmoqchi bo'ldi?”\n" +
+          "• “Dilnozaga 'rahmat, ertaga boraman' deb yubor”\n\n" +
+          "/reset — forget our conversation · /status · /deleted · /chats");
       case "/status": {
         const s = await this.db.stats();
         const connections = await this.db.activeConnections();
@@ -285,8 +292,108 @@ export class Vault {
           return this.notify("AI error: " + escape(error.message));
         }
       }
+      case "/reset":
+        this.agentHistory = [];
+        return this.notify("🧠 Conversation cleared.");
       default:
-        return this.notify("Commands:\n/ai <i>question</i> — ask about your chats\n/analyze <i>name</i> — understand a person\n/draft <i>name | goal</i> — draft a reply\n/chats · /status · /deleted · /search <i>words</i>");
+        // Anything that isn't a known command is talked to the AI agent, which
+        // decides what to do (analyse, search, look up, draft, send…).
+        return this.runAgent(message.text ?? "");
+    }
+  }
+
+  // ── Conversational agent ────────────────────────────────────────────────
+
+  get agentTools() {
+    return [
+      { name: "list_chats", description: "List the user's private chats the vault has stored, with message counts.", parameters: { type: "OBJECT", properties: {} } },
+      { name: "get_chat_messages", description: "Get recent messages of one chat for analysis. Use the person's name.", parameters: { type: "OBJECT", properties: { name: { type: "STRING" }, limit: { type: "INTEGER" } }, required: ["name"] } },
+      { name: "search_messages", description: "Search all stored messages for words.", parameters: { type: "OBJECT", properties: { query: { type: "STRING" } }, required: ["query"] } },
+      { name: "recent_deletions", description: "Messages others deleted, newest first.", parameters: { type: "OBJECT", properties: { limit: { type: "INTEGER" } } } },
+      { name: "recent_edits", description: "Messages others edited, newest first.", parameters: { type: "OBJECT", properties: { limit: { type: "INTEGER" } } } },
+      { name: "lookup_user", description: "Public Telegram info for a @username or t.me link.", parameters: { type: "OBJECT", properties: { username: { type: "STRING" } }, required: ["username"] } },
+      { name: "send_message", description: "Send a message AS the user to one of their private chats, via the business connection. ONLY call this when the user, in their most recent message, explicitly asked to send this specific text to this specific person. Never invent a send.", parameters: { type: "OBJECT", properties: { name: { type: "STRING" }, text: { type: "STRING" } }, required: ["name", "text"] } },
+    ];
+  }
+
+  async runTool(name, args) {
+    try {
+      if (name === "list_chats") {
+        const chats = await this.db.chats(40);
+        return { chats: chats.map((c) => ({ name: c.chat_title, messages: c.messages })) };
+      }
+      if (name === "get_chat_messages") {
+        const chat = await this.db.findChat(args.name);
+        if (!chat) return { error: "no such chat" };
+        const msgs = await this.db.chatMessages(chat.chat_id, Math.min(args.limit || 200, 400));
+        return { chat: chat.chat_title, messages: msgs.map((m) => ({ who: m.is_outgoing ? "Me" : "Them", text: m.text || (m.media_kind ? `[${m.media_kind}]` : ""), at: m.sent_at, deleted: !!m.deleted_at, edited: !!m.edited_at })) };
+      }
+      if (name === "search_messages") {
+        const rows = await this.db.search(args.query, 20);
+        return { results: rows.map((r) => ({ chat: r.chat_title, who: r.is_outgoing ? "Me" : "Them", text: r.text, deleted: !!r.deleted_at })) };
+      }
+      if (name === "recent_deletions") {
+        const rows = await this.db.deleted({ limit: Math.min(args.limit || 10, 30) });
+        return { deleted: rows.map((r) => ({ chat: r.chat_title, who: r.sender_name, text: r.text || `[${r.media_kind}]`, at: r.deleted_at })) };
+      }
+      if (name === "recent_edits") {
+        const rows = await this.db.edited({ limit: Math.min(args.limit || 10, 30) });
+        return { edited: rows.map((r) => ({ chat: r.chat_title, who: r.sender_name, now: r.text })) };
+      }
+      if (name === "lookup_user") {
+        const handle = String(args.username).replace(/^.*t\.me\//, "").replace(/^@/, "").trim();
+        try {
+          const chat = await this.bot.call("getChat", { chat_id: "@" + handle });
+          return { id: chat.id, name: [chat.first_name, chat.last_name].filter(Boolean).join(" ") || chat.title, username: chat.username, bio: chat.bio, description: chat.description, type: chat.type };
+        } catch (e) { return { error: "not found or private: " + e.message }; }
+      }
+      if (name === "send_message") {
+        const connections = await this.db.activeConnections();
+        if (!connections.length) return { error: "no active business connection" };
+        const chat = await this.db.findChat(args.name);
+        if (!chat) return { error: "no such chat to send to" };
+        await this.bot.call("sendMessage", { business_connection_id: connections[0].id, chat_id: Number(chat.chat_id), text: args.text });
+        return { sent: true, to: chat.chat_title };
+      }
+      return { error: "unknown tool" };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  async runAgent(text) {
+    if (!this.ai) return this.notify("AI is off. Add a Gemini key in Nodogram → Settings → AI Assistant.");
+    if (!text.trim()) return this.notify("Menga oddiy tilda yozing — chatlaringizni tahlil qilaman, odamni o'rganaman, javob yozaman yoki yuboraman.");
+    await this.bot.call("sendChatAction", { chat_id: this.config.ownerId, action: "typing" }).catch(() => {});
+    const system = [
+      "You are the user's personal Telegram AI assistant, speaking with them privately in their bot.",
+      "Talk naturally in the user's language (Uzbek Latin if unsure). You control their Telegram through tools:",
+      "understand people from their chats, search, report what others deleted/edited, look up public @usernames,",
+      "draft replies in the user's own style, and — only when the user clearly asks — send a message as them.",
+      "Be warm, sharp, honest and concise. Ground claims in real messages (use tools to fetch them); never invent.",
+      "Before sending anything with send_message, make sure the user explicitly asked to send that exact message to",
+      "that exact person in their latest request; if unsure, ask them to confirm instead of sending.",
+    ].join(" ");
+    this.agentHistory.push({ role: "user", parts: [{ text }] });
+    if (this.agentHistory.length > 24) this.agentHistory = this.agentHistory.slice(-24);
+    try {
+      for (let step = 0; step < 6; step++) {
+        const content = await this.ai.turn({ system, contents: this.agentHistory, tools: this.agentTools });
+        const call = content.parts?.find((p) => p.functionCall)?.functionCall;
+        if (call) {
+          this.agentHistory.push({ role: "model", parts: [{ functionCall: call }] });
+          const result = await this.runTool(call.name, call.args || {});
+          this.agentHistory.push({ role: "user", parts: [{ functionResponse: { name: call.name, response: result } }] });
+          if (call.name === "send_message") await this.bot.call("sendChatAction", { chat_id: this.config.ownerId, action: "typing" }).catch(() => {});
+          continue;
+        }
+        const answer = (content.parts || []).map((p) => p.text).filter(Boolean).join("").trim();
+        this.agentHistory.push({ role: "model", parts: [{ text: answer || "…" }] });
+        return this.notify(escape(answer || "Tushunmadim, qayta yozing."));
+      }
+      return this.notify("Juda ko'p qadam bo'ldi — savolni soddalashtiring.");
+    } catch (error) {
+      return this.notify("AI error: " + escape(error.message));
     }
   }
 }
