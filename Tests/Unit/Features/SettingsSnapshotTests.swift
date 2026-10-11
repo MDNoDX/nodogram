@@ -31,6 +31,10 @@ struct SettingsSnapshotTests {
     @Test("Render settings pages")
     func pages() throws {
         let model = AppModel()
+        let searchState = GlobalSearchState()
+        searchState.query = "formula"
+        searchState.globalPeople = []
+        try render(GlobalSearchView(model: model, state: searchState).background(Color(nsColor: .windowBackgroundColor)), "global-search", size: CGSize(width: 640, height: 660))
         try render(AppearancePage(), "settings-appearance")
         try render(GeneralPage(), "settings-general")
         try render(FeaturesPage(model: model), "settings-features", size: CGSize(width: 760, height: 1400))
