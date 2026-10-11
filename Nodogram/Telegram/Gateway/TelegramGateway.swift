@@ -1161,3 +1161,13 @@ extension TelegramGateway {
 }
 
 public enum TopChatKind: Sendable { case people, groups, channels, bots }
+
+extension TelegramGateway {
+    /// Clears the "recently found" list that the search shows when empty.
+    public func clearRecentChats() async { _ = try? await client.clearRecentlyFoundChats() }
+
+    /// Global message search limited to one media kind (Media/Links/Files…).
+    public func searchGlobalContent(_ filter: MediaFilter, query: String, limit: Int = 50) async -> [NodogramDomain.Message] {
+        (try? await searchAll(filter, query: query, limit: limit).messages) ?? []
+    }
+}

@@ -59,11 +59,22 @@ public struct ChatListView: View {
         }
         .navigationTitle(model.selectedFolderID.flatMap { id in model.folders.first { $0.id == id }?.title }
                          ?? model.selectedDestination.title)
-        .searchable(
-            text: Binding(get: { model.searchText }, set: { model.searchText = $0 }),
-            placement: .toolbar,
-            prompt: "Search chats"
-        )
+        .safeAreaInset(edge: .top, spacing: 0) {
+            Button { model.openGlobalSearch() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text("Search").font(.system(size: 13)).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("⌘K").font(.system(size: 11)).foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 9).padding(.vertical, 6)
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
+            .background(.bar)
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {

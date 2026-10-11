@@ -1,27 +1,35 @@
-//  Telegram-style global search: your chats, public chats and channels, people
-//  and bots found on Telegram's servers, and messages anywhere — with
-//  recommendations when the box is empty.
+//  Telegram-style global search: a Saved shortcut and Recent list when empty;
+//  when searching, tabs for Chats, Channels, Apps (bots), and message content
+//  (Media, Links, Files) — your own chats listed apart from public results.
 
 import Foundation
 import SwiftUI
 import NodogramDomain
+import NodogramTelegram
 import NodogramUI
 
 @MainActor
 @Observable
 public final class GlobalSearchState {
-    public enum Tab: String, CaseIterable, Sendable { case all = "All", chats = "Chats", channels = "Channels", media = "Media", bots = "Bots" }
+    public enum Tab: String, CaseIterable, Sendable {
+        case chats = "Chats", channels = "Channels", apps = "Apps", media = "Media", links = "Links", files = "Files"
+    }
     public var query = ""
-    public var tab: Tab = .all
+    public var tab: Tab = .chats
+    // Chats tab
     public var localChats: [ChatID] = []
-    public var globalChats: [ChatID] = []
+    public var globalPeople: [ChatID] = []
+    // Other tabs
     public var channels: [ChatID] = []
     public var bots: [ChatID] = []
     public var messages: [Message] = []
+    public var content: [Message] = []
+    // Empty state
     public var recent: [ChatID] = []
     public var recommended: [ChatID] = []
     public var searching = false
     var token = 0
+    var contentToken = 0
 }
 
 extension AppModel {
@@ -46,6 +54,11 @@ extension AppModel {
 
     public func closeGlobalSearch() { globalSearch = nil }
 
+    public func clearRecentSearches() {
+        globalSearch?.recent = []
+        Task { await gateway?.clearRecentChats() }
+    }
+
     public func runGlobalSearch(_ query: String) {
         guard let state = globalSearch, let gateway else { return }
         state.query = query
@@ -53,14 +66,14 @@ extension AppModel {
         state.token += 1
         let token = state.token
         guard !trimmed.isEmpty else {
-            state.localChats = []; state.globalChats = []; state.channels = []; state.bots = []; state.messages = []
+            state.localChats = []; state.globalPeople = []; state.channels = []
+            state.bots = []; state.messages = []; state.content = []
             state.searching = false
             return
         }
         state.searching = true
         Task { [weak self] in
             guard let self else { return }
-            // Local first (instant), then the server results as they arrive.
             let local = await gateway.searchLocalChats(trimmed)
             if state.token == token { state.localChats = local; for id in local { self.ensureAvatar(for: id) } }
 
@@ -70,34 +83,53 @@ extension AppModel {
             let msgs = await messagesTask
             guard state.token == token else { return }
 
-            // Split public results by kind so the tabs are meaningful.
-            var channels: [ChatID] = [], bots: [ChatID] = [], others: [ChatID] = []
+            var channels: [ChatID] = [], bots: [ChatID] = [], people: [ChatID] = []
             for id in global {
                 var chat = self.chatsByID[id]
                 if chat == nil { chat = await gateway.resolveChat(id) }
-                guard let chat else { others.append(id); continue }
+                guard let chat else { people.append(id); continue }
                 self.chatsByID[chat.id] = chat
                 switch chat.kind {
                 case .channel: channels.append(id)
                 case .privateChat where chat.isBot: bots.append(id)
-                default: others.append(id)
+                default: people.append(id)
                 }
             }
             guard state.token == token else { return }
-            state.globalChats = others
+            state.globalPeople = people
             state.channels = channels
             state.bots = bots
             state.messages = msgs.messages
             state.searching = false
             for id in global { self.ensureAvatar(for: id) }
         }
+        loadContentTab()
     }
 
-    /// Opens a search result, loading the chat into the list if it's new.
+    /// Loads the active content tab (Media/Links/Files) on demand.
+    public func loadContentTab() {
+        guard let state = globalSearch, let gateway else { return }
+        let filter: TelegramGateway.MediaFilter
+        switch state.tab {
+        case .media: filter = .photosAndVideos
+        case .links: filter = .links
+        case .files: filter = .files
+        default: return
+        }
+        let trimmed = state.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { state.content = []; return }
+        state.contentToken += 1
+        let token = state.contentToken
+        Task { [weak self] in
+            let found = await gateway.searchGlobalContent(filter, query: trimmed)
+            guard self != nil, state.contentToken == token else { return }
+            state.content = found
+        }
+    }
+
     public func openSearchResult(_ id: ChatID) {
         if chatsByID[id] == nil {
             Task { [weak self] in
-                _ = await self?.gateway?.resolveChat(id)
                 if let chat = await self?.gateway?.resolveChat(id) { self?.chatsByID[chat.id] = chat }
                 self?.selectedDestination = .allChats
                 self?.select(id)
@@ -106,6 +138,13 @@ extension AppModel {
             selectedDestination = .allChats
             select(id)
         }
+        closeGlobalSearch()
+    }
+
+    public func openSavedMessages() {
+        guard let me = myUserID else { return }
+        selectedDestination = .allChats
+        select(ChatID(me.rawValue))
         closeGlobalSearch()
     }
 }
