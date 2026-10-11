@@ -793,12 +793,18 @@ public final class TelegramGateway: @unchecked Sendable {
     public func commentThread(for message: MessageID, in chat: ChatID) async throws(DomainError) -> CommentThread {
         try await run {
             let info = try await self.client.getMessageThread(chatId: chat.rawValue, messageId: message.rawValue)
-            return CommentThread(chatID: ChatID(info.chatId), threadID: info.messageThreadId)
+            // The thread lives in the linked discussion group; open it so its
+            // history can be read, then keep that chat id for paging.
+            _ = try? await self.client.openChat(chatId: info.chatId)
+            let starter = info.messages.map(\.id).min() ?? info.messageThreadId
+            return CommentThread(chatID: ChatID(info.chatId), threadID: starter)
         }
     }
 
-    /// Comments on a channel post, oldest first.
-    public func comments(on message: MessageID, in chat: ChatID, before: MessageID? = nil,
+    /// Comments on a channel post, oldest first. `discussion` is the linked
+    /// group's chat id (from `commentThread`), where the thread history lives —
+    /// not the channel's id, which is why this used to fail.
+    public func comments(in discussion: ChatID, thread: MessageID, before: MessageID? = nil,
                          limit: Int = 50) async throws(DomainError) -> [NodogramDomain.Message] {
         try await run {
             var collected: [TDLibKit.Message] = []
@@ -806,9 +812,9 @@ public final class TelegramGateway: @unchecked Sendable {
             var cursor = before?.rawValue ?? 0
             for _ in 0..<6 where collected.count < limit {
                 let batch = try await self.client.getMessageThreadHistory(
-                    chatId: chat.rawValue, fromMessageId: cursor,
+                    chatId: discussion.rawValue, fromMessageId: cursor,
                     limit: min(100, limit - collected.count),
-                    messageId: message.rawValue, offset: 0)
+                    messageId: thread.rawValue, offset: 0)
                 let fresh = (batch.messages ?? []).filter { seen.insert($0.id).inserted }
                 guard let oldest = fresh.last else { break }
                 collected += fresh
@@ -1094,3 +1100,64 @@ final class ClosedSignal: @unchecked Sendable {
         continuation?.resume()
     }
 }
+
+// MARK: - Global search (Telegram-style)
+
+extension TelegramGateway {
+
+    /// Your own chats matching a query (by title), newest first.
+    public func searchLocalChats(_ query: String, limit: Int = 40) async -> [ChatID] {
+        guard let result = try? await client.searchChats(limit: limit, query: query, typeFilter: nil) else { return [] }
+        return result.chatIds.map(ChatID.init)
+    }
+
+    /// Public chats, channels, bots and people found on Telegram's servers.
+    public func searchGlobalChats(_ query: String) async -> [ChatID] {
+        guard query.count >= 1,
+              let result = try? await client.searchPublicChats(query: query, typeFilter: nil) else { return [] }
+        return result.chatIds.map(ChatID.init)
+    }
+
+    /// Chats recently found through search, for the "Recent" strip.
+    public func recentlyFoundChats() async -> [ChatID] {
+        guard let result = try? await client.searchRecentlyFoundChats(limit: 20, query: "", typeFilter: nil) else { return [] }
+        return result.chatIds.map(ChatID.init)
+    }
+
+    /// Channels Telegram recommends for the user.
+    public func recommendedChats() async -> [ChatID] {
+        guard let result = try? await client.getRecommendedChats() else { return [] }
+        return result.chatIds.map(ChatID.init)
+    }
+
+    /// The user's most-used chats of a kind (people, groups, channels, bots).
+    public func topChats(_ kind: TopChatKind, limit: Int = 20) async -> [ChatID] {
+        let category: TopChatCategory
+        switch kind {
+        case .people: category = .topChatCategoryUsers
+        case .groups: category = .topChatCategoryGroups
+        case .channels: category = .topChatCategoryChannels
+        case .bots: category = .topChatCategoryBots
+        }
+        guard let result = try? await client.getTopChats(category: category, limit: limit) else { return [] }
+        return result.chatIds.map(ChatID.init)
+    }
+
+    /// Messages anywhere matching a query (Telegram's global message search).
+    public func searchGlobalMessages(_ query: String, offset: String = "", limit: Int = 50) async
+        -> (messages: [NodogramDomain.Message], nextOffset: String) {
+        guard let found = try? await client.searchMessages(
+            chatList: nil, chatTypeFilter: nil, filter: nil, limit: limit,
+            maxDate: 0, minDate: 0, offset: offset, query: query) else { return ([], "") }
+        return ((found.messages ?? []).map(cache.mapMessage), found.nextOffset)
+    }
+
+    /// A chat's domain model, fetching it if the cache doesn't have it yet.
+    public func resolveChat(_ id: ChatID) async -> NodogramDomain.Chat? {
+        if let chat = cache.chat(id.rawValue) { return chat }
+        _ = try? await client.getChat(chatId: id.rawValue)
+        return cache.chat(id.rawValue)
+    }
+}
+
+public enum TopChatKind: Sendable { case people, groups, channels, bots }

@@ -30,7 +30,7 @@ public struct NodogramCommands: Commands {
         }
 
         CommandGroup(replacing: .newItem) {
-            Button("Quick Open…") { model?.isPaletteVisible = true }
+            Button("Search Everywhere…") { model?.openGlobalSearch() }
                 .keyboardShortcut("k", modifiers: .command)
                 .disabled(model == nil)
         }

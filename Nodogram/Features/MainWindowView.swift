@@ -88,7 +88,14 @@ public struct MainWindowView: View {
                     .overlay { if model.isLocked { LockScreen(model: model) } }
                     .overlay { StoryViewerOverlay(model: model) }
                     .overlay(alignment: .top) {
-                        if model.isPaletteVisible {
+                        if let search = model.globalSearch {
+                            ZStack(alignment: .top) {
+                                Color.black.opacity(0.2).ignoresSafeArea()
+                                    .onTapGesture { model.closeGlobalSearch() }
+                                GlobalSearchView(model: model, state: search).padding(.top, 70)
+                            }
+                            .transition(.opacity)
+                        } else if model.isPaletteVisible {
                             ZStack(alignment: .top) {
                                 Color.black.opacity(0.18).ignoresSafeArea()
                                     .onTapGesture { model.isPaletteVisible = false }
@@ -100,6 +107,7 @@ public struct MainWindowView: View {
                     .animation(.easeOut(duration: 0.15), value: model.viewerMessageID)
                     .animation(.easeOut(duration: 0.15), value: model.storyViewer)
                     .animation(.easeOut(duration: 0.12), value: model.isPaletteVisible)
+                    .animation(.easeOut(duration: 0.12), value: model.globalSearch != nil)
                     .focusedSceneValue(\.appModel, model)
                     // Appearance changes redraw everything with the new tokens.
                     .id("appearance-\(accentIndex)-\(textSize)-\(solidBubbles)")

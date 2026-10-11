@@ -202,6 +202,25 @@ extension AppModel {
         }
     }
 
+    /// Creates a channel or a (super)group, adds members, opens it.
+    public func createChat(title: String, description: String, isChannel: Bool, members: [UserID], asSupergroup: Bool) {
+        guard let gateway else { return }
+        Task { [weak self] in
+            do {
+                let chat: ChatID
+                if isChannel || asSupergroup {
+                    chat = try await gateway.createSupergroup(title: title, description: description, isChannel: isChannel)
+                    if !members.isEmpty { await gateway.addMembers(members, to: chat) }
+                } else {
+                    chat = try await gateway.createGroup(title: title, with: members)
+                }
+                self?.selectedDestination = .allChats
+                self?.select(chat)
+                self?.showToast(isChannel ? "Channel created" : "Group created")
+            } catch { self?.showToast(AppModel.describe(error)) }
+        }
+    }
+
     public func mutualContacts() async -> [UserID] { await gateway?.mutualContacts() ?? [] }
 
     public func chatDescription(_ chat: ChatID) async -> String { await gateway?.chatDescription(chat) ?? "" }

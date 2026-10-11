@@ -117,6 +117,21 @@ extension TelegramGateway {
         }
     }
 
+    /// Creates a public-capable supergroup or a channel.
+    public func createSupergroup(title: String, description: String, isChannel: Bool) async throws(DomainError) -> ChatID {
+        try await run {
+            let chat = try await self.client.createNewSupergroupChat(
+                description: description, forImport: false, isChannel: isChannel, isForum: false,
+                location: nil, messageAutoDeleteTime: 0, title: title)
+            return ChatID(chat.id)
+        }
+    }
+
+    /// Adds members to a group or channel after creating it.
+    public func addMembers(_ users: [UserID], to chat: ChatID) async {
+        _ = try? await client.addChatMembers(chatId: chat.rawValue, userIds: users.map(\.rawValue))
+    }
+
     /// People who have you in their contacts while you have them in yours —
     /// the only "who saved me" Telegram reveals.
     public func mutualContacts() async -> [UserID] {

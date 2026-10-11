@@ -64,7 +64,23 @@ public struct ChatListView: View {
             placement: .toolbar,
             prompt: "Search chats"
         )
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button { newChat = .group } label: { Label("New Group", systemImage: "person.2") }
+                    Button { newChat = .channel } label: { Label("New Channel", systemImage: "megaphone") }
+                    Divider()
+                    Button { model.openGlobalSearch() } label: { Label("Search Everywhere…", systemImage: "magnifyingglass") }
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .help("New")
+            }
+        }
+        .sheet(item: $newChat) { kind in NewChatSheet(model: model, kind: kind) }
     }
+
+    @State private var newChat: NewChatKind?
 
     private var emptyTitle: String {
         switch model.selectedDestination {

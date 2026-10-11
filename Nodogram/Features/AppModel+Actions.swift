@@ -359,7 +359,7 @@ extension AppModel {
         Task { [weak self] in
             do {
                 let thread = try await gateway.commentThread(for: post.id, in: post.chatID)
-                let loaded = try await gateway.comments(on: post.id, in: post.chatID)
+                let loaded = try await gateway.comments(in: thread.chatID, thread: MessageID(thread.threadID))
                 guard let self, self.comments?.postMessageID == post.id else { return }
                 state.discussionChatID = thread.chatID
                 state.threadID = thread.threadID
@@ -368,7 +368,6 @@ extension AppModel {
                 state.messages = loaded.filter { $0.id.rawValue != thread.threadID }
                 state.isLoading = false
                 self.comments = state
-                await gateway.ensureChat(thread.chatID)
             } catch {
                 guard let self, self.comments?.postMessageID == post.id else { return }
                 state.isLoading = false

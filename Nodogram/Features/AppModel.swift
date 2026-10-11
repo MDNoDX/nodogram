@@ -47,7 +47,7 @@ public final class AppModel {
 
     // MARK: Chat list
 
-    public private(set) var chatsByID: [ChatID: Chat] = [:]
+    public internal(set) var chatsByID: [ChatID: Chat] = [:]
     public private(set) var isLoadingChats = false
     public private(set) var myUserID: UserID?
     public var selectedDestination: SidebarDestination = .allChats {
@@ -220,6 +220,8 @@ public final class AppModel {
     var archivedRecently: [String: Date] = [:]
     /// The ⋯ → "Understand this chat" request.
     public var assistantChatRequested = false
+    /// The global-search overlay, when open.
+    public var globalSearch: GlobalSearchState?
     /// Bumped when accounts change, so lists redraw.
     public internal(set) var accountsVersion = 0
     /// The account to return to if an Add Account sign-in is cancelled.
