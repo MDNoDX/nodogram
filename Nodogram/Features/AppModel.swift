@@ -224,6 +224,11 @@ public final class AppModel {
     public var globalSearch: GlobalSearchState?
     /// The docked AI panel beside a conversation.
     public var assistantPanelVisible = false
+    /// Chat-list multi-selection (for batch delete/clear).
+    public internal(set) var isSelectingChats = false
+    public internal(set) var selectedChatIDs: Set<ChatID> = []
+    /// Progress while wiping your messages across several chats.
+    public internal(set) var wipeProgress: WipeProgress?
     /// Bumped when accounts change, so lists redraw.
     public internal(set) var accountsVersion = 0
     /// The account to return to if an Add Account sign-in is cancelled.

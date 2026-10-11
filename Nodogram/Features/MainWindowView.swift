@@ -86,6 +86,18 @@ public struct MainWindowView: View {
                 mainLayout
                     .overlay { MediaViewerOverlay(model: model) }
                     .overlay { if model.isLocked { LockScreen(model: model) } }
+                    .overlay(alignment: .bottom) {
+                        if let wipe = model.wipeProgress {
+                            HStack(spacing: 10) {
+                                ProgressView().controlSize(.small)
+                                Text("Deleting your messages… \(wipe.chatTitle.isEmpty ? "" : wipe.chatTitle) (\(wipe.done)/\(wipe.total))")
+                                    .font(.system(size: 12))
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .background(.regularMaterial, in: Capsule())
+                            .shadow(radius: 8).padding(.bottom, 24)
+                        }
+                    }
                     .overlay { StoryViewerOverlay(model: model) }
                     .overlay(alignment: .top) {
                         if let search = model.globalSearch {

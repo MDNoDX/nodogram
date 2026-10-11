@@ -32,28 +32,20 @@ public struct ChatListView: View {
                     )
                 }
             } else {
-                List(selection: Binding(get: { model.selectedChatID }, set: { model.select($0) })) {
+                List(selection: Binding(get: { model.isSelectingChats ? nil : model.selectedChatID }, set: { if !model.isSelectingChats { model.select($0) } })) {
                     ForEach(chats) { chat in
-                        ChatRow(chat: chat, activity: model.activityText(for: chat.id),
-                                hasStories: model.storyOwners[chat.id]?.hasUnread == true,
-                                folderTags: showFolderTags && model.selectedFolderID == nil ? model.folderTitles(for: chat) : [])
-                            .tag(chat.id)
-                            .contextMenu { ChatMenu(model: model, chat: chat) }
-                            .onAppear {
-                                model.ensureAvatar(for: chat.id)
-                                // Page in more chats as the end comes into view.
-                                if chat.id == chats.last?.id {
-                                    model.loadMoreChats(in: model.selectedFolderID.map { .folder($0) } ?? (model.selectedDestination == .archived ? .archive : .main))
-                                }
-                            }
+                        chatListRow(chat, isLast: chat.id == chats.last?.id)
                     }
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
                 .safeAreaInset(edge: .top, spacing: 0) {
-                    if model.selectedDestination == .allChats, model.searchText.isEmpty {
+                    if model.selectedDestination == .allChats, model.searchText.isEmpty, !model.isSelectingChats {
                         StoriesStrip(model: model)
                     }
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if model.isSelectingChats { ChatSelectionBar(model: model) }
                 }
             }
         }
@@ -113,6 +105,87 @@ public struct ChatListView: View {
         case .groups: return "Group chats appear here."
         case .channels: return "Channels you follow appear here."
         default: return L10n.noChatsBody
+        }
+    }
+}
+
+extension ChatListView {
+    @ViewBuilder
+    func chatListRow(_ chat: Chat, isLast: Bool) -> some View {
+        HStack(spacing: 8) {
+            if model.isSelectingChats {
+                Image(systemName: model.selectedChatIDs.contains(chat.id) ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 18))
+                    .foregroundStyle(model.selectedChatIDs.contains(chat.id) ? Theme.accent : .secondary)
+            }
+            ChatRow(chat: chat, activity: model.activityText(for: chat.id),
+                    hasStories: model.storyOwners[chat.id]?.hasUnread == true,
+                    folderTags: showFolderTags && model.selectedFolderID == nil ? model.folderTitles(for: chat) : [])
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if model.isSelectingChats { model.toggleChatSelection(chat.id) } else { model.select(chat.id) } }
+        .tag(chat.id)
+        .contextMenu { ChatMenu(model: model, chat: chat) }
+        .onAppear {
+            model.ensureAvatar(for: chat.id)
+            if isLast {
+                model.loadMoreChats(in: model.selectedFolderID.map { .folder($0) } ?? (model.selectedDestination == .archived ? .archive : .main))
+            }
+        }
+    }
+}
+
+/// The bar shown while selecting chats: clear, wipe my messages, or delete.
+struct ChatSelectionBar: View {
+    let model: AppModel
+    @State private var confirm: ChatBatchAction?
+
+    enum ChatBatchAction: Identifiable { case clear, wipeMine, delete; var id: Int { hashValue } }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button("Cancel") { model.endChatSelection() }
+            Spacer()
+            Text("\(model.selectedChatIDs.count) selected").font(.system(size: 12)).foregroundStyle(.secondary)
+            Spacer()
+            Menu {
+                Button { confirm = .clear } label: { Label("Clear History", systemImage: "eraser") }
+                Button { confirm = .wipeMine } label: { Label("Delete My Messages", systemImage: "trash.slash") }
+                Divider()
+                Button(role: .destructive) { confirm = .delete } label: { Label("Delete / Leave", systemImage: "trash") }
+            } label: {
+                Label("Actions", systemImage: "ellipsis.circle")
+            }
+            .disabled(model.selectedChatIDs.isEmpty)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+        .confirmationDialog(title, isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
+                            titleVisibility: .visible, presenting: confirm) { action in
+            switch action {
+            case .clear:
+                Button("Clear for Me", role: .destructive) { model.clearSelectedHistory(forEveryone: false) }
+            case .wipeMine:
+                Button("Delete My Messages", role: .destructive) { model.wipeMyMessagesFromSelected() }
+            case .delete:
+                Button("Delete / Leave", role: .destructive) { model.deleteSelectedChats(forEveryone: false) }
+            }
+        } message: { action in
+            switch action {
+            case .clear: Text("Clears the history of \(model.selectedChatIDs.count) chats on this device.")
+            case .wipeMine: Text("Removes every message you sent in \(model.selectedChatIDs.count) chats, for everyone. This can't be undone.")
+            case .delete: Text("Deletes or leaves \(model.selectedChatIDs.count) chats.")
+            }
+        }
+    }
+
+    private var title: String {
+        switch confirm {
+        case .clear: return "Clear history?"
+        case .wipeMine: return "Delete your messages?"
+        case .delete: return "Delete these chats?"
+        case nil: return ""
         }
     }
 }
@@ -316,6 +389,19 @@ struct ChatMenu: View {
             Divider()
             Button { model.openStories(from: chat.id) } label: { Label("View Stories", systemImage: "circle.dashed") }
         }
+        Divider()
+        Button { model.beginChatSelection(with: chat.id) } label: { Label("Select", systemImage: "checkmark.circle") }
+        Button { model.clearHistory(chat.id, forEveryone: false) } label: { Label("Clear History", systemImage: "eraser") }
+        if !chat.isSavedMessages {
+            Button { model.wipeMyMessages(from: [chat.id]) } label: { Label("Delete My Messages Here", systemImage: "trash.slash") }
+        }
+        Button(role: .destructive) { model.deleteChat(chat.id, forEveryone: false) } label: {
+            Label(isGroupLike ? "Leave" : "Delete Chat", systemImage: "trash")
+        }
+    }
+
+    private var isGroupLike: Bool {
+        switch chat.kind { case .basicGroup, .supergroup, .channel: return true; default: return false }
     }
 }
 

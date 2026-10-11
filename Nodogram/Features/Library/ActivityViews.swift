@@ -212,6 +212,9 @@ struct MyActivityView: View {
     @State private var query = ""
     @State private var managing: GroupSummary?
     @State private var filter = 0
+    @State private var selecting = false
+    @State private var selected: Set<ChatID> = []
+    @State private var confirmWipe = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -227,7 +230,22 @@ struct MyActivityView: View {
                 }
                 .pickerStyle(.segmented).labelsHidden()
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            if filter != 5 {
+                HStack {
+                    Button(selecting ? "Done" : "Select") { selecting.toggle(); if !selecting { selected = [] } }
+                        .controlSize(.small)
+                    if selecting {
+                        Button("All Shown") { selected = Set(visible.filter { $0.role != .left }.map(\.id)) }
+                            .controlSize(.small)
+                    }
+                    Spacer()
+                    if selecting, !selected.isEmpty {
+                        Button("Delete My Messages (\(selected.count))", role: .destructive) { confirmWipe = true }
+                            .controlSize(.small)
+                    }
+                }
+                .padding(.horizontal, 12).padding(.bottom, 6)
+            }
             Divider()
             if filter == 5 {
                 MutualContactsList(model: model, query: query)
@@ -237,6 +255,10 @@ struct MyActivityView: View {
             } else {
                 List(visible) { group in
                     HStack(spacing: 10) {
+                        if selecting {
+                            Image(systemName: selected.contains(group.id) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(group.role == .left ? AnyShapeStyle(.tertiary) : AnyShapeStyle(selected.contains(group.id) ? Theme.accent : Color.secondary))
+                        }
                         let chat = model.chatsByID[group.id]
                         Avatar(title: group.title, seed: group.id.rawValue, size: 36,
                                imagePath: chat?.avatarPath, thumbnail: chat?.avatarThumbnail)
@@ -260,7 +282,12 @@ struct MyActivityView: View {
                     }
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
-                    .onTapGesture { managing = group }
+                    .onTapGesture {
+                        if selecting {
+                            guard group.role != .left else { return }
+                            if selected.contains(group.id) { selected.remove(group.id) } else { selected.insert(group.id) }
+                        } else { managing = group }
+                    }
                     .contextMenu {
                         Button("Open Chat") { model.selectedDestination = .allChats; model.select(group.id) }
                         Button("Manage…") { managing = group }
@@ -268,6 +295,14 @@ struct MyActivityView: View {
                 }
                 .listStyle(.inset)
             }
+        }
+        .confirmationDialog("Delete your messages from \(selected.count) chats?", isPresented: $confirmWipe, titleVisibility: .visible) {
+            Button("Delete My Messages", role: .destructive) {
+                model.wipeMyMessages(from: Array(selected))
+                selecting = false; selected = []
+            }
+        } message: {
+            Text("Removes every message you sent in these chats, for everyone. Only chats you are still in can be cleared — messages in groups you have left can't be removed. This can't be undone.")
         }
         .task { groups = model.myGroups() }
         .onChange(of: model.chatsByID.count) { _, _ in groups = model.myGroups() }
