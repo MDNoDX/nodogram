@@ -51,7 +51,7 @@ class FakeBot {
 
 const make = () => {
   const db = new FakeDB(), bot = new FakeBot();
-  const vault = new Vault({ config: { ownerId: OWNER, mediaDir: "/tmp/x", notifyEdits: true }, db, bot, log: {} });
+  const vault = new Vault({ config: { ownerId: OWNER, mediaDir: "/tmp/x", notifyEdits: true, logChannel: -100999 }, db, bot, log: {} });
   return { db, bot, vault };
 };
 
@@ -77,7 +77,7 @@ test("a message someone deletes comes back to the owner with its text", async ()
   await vault.handle({ deleted_business_messages: { business_connection_id: "c1", chat: { id: 42 }, message_ids: [10] } });
   assert.equal(bot.sent.length, 1);
   assert.equal(bot.sent[0].method, "sendMessage");
-  assert.equal(bot.sent[0].params.chat_id, OWNER);
+  assert.equal(bot.sent[0].params.chat_id, -100999);
   assert.match(bot.sent[0].params.text, /Nodir/);
   assert.match(bot.sent[0].params.text, /Ertaga soat 10 da &lt;keling&gt;/);
 });
@@ -100,6 +100,7 @@ test("deleted photos are re-sent with the notice as caption", async () => {
   await vault.handle({ deleted_business_messages: { business_connection_id: "c1", chat: { id: 42 }, message_ids: [12] } });
   assert.equal(bot.sent[0].method, "sendPhoto");
   assert.equal(bot.sent[0].params.photo, "big");
+  assert.equal(bot.sent[0].params.chat_id, -100999);
   assert.match(bot.sent[0].params.caption, /look/);
 });
 
@@ -109,6 +110,7 @@ test("edits notify with before and after", async () => {
   await vault.handle({ business_message: msg(13, "5 da") });
   bot.sent = [];
   await vault.handle({ edited_business_message: { ...msg(13, "6 da"), edit_date: 1_760_000_100 } });
+  assert.equal(bot.sent[0].params.chat_id, -100999);
   assert.match(bot.sent[0].params.text, /Before:.*5 da/s);
   assert.match(bot.sent[0].params.text, /Now:.*6 da/s);
 });

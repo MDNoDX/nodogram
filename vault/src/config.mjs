@@ -40,7 +40,14 @@ export function loadConfig() {
     mediaDir: get("VAULT_MEDIA_DIR", path.join(supportDir, "vault-media")),
     notifyEdits: get("NOTIFY_EDITS", "true") === "true",
     logChannel: get("LOG_CHANNEL") ? Number(get("LOG_CHANNEL")) : null,
+    geminiKeyFile: get("GEMINI_KEY_FILE"),
+    geminiKeyInline: get("GEMINI_KEY"),
   };
+  // The Gemini key for the bot AI: inline, or read from the app's key file.
+  config.geminiKey = config.geminiKeyInline || null;
+  if (!config.geminiKey && config.geminiKeyFile) {
+    try { config.geminiKey = fs.readFileSync(config.geminiKeyFile, "utf8").trim() || null; } catch { config.geminiKey = null; }
+  }
   const missing = ["botToken", "ownerId", "apiToken"].filter((k) => !config[k]);
   if (missing.length) throw new Error(`Missing configuration: ${missing.join(", ")} (see ${envFile})`);
   return config;

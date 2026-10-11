@@ -183,6 +183,41 @@ export class VaultDB {
     return r.rows;
   }
 
+  /// Distinct chats the vault has seen (incoming side), most recent first.
+  async chats(limit = 40) {
+    const r = await this.pool.query(
+      `SELECT chat_id, MAX(chat_title) AS chat_title, MAX(chat_username) AS chat_username,
+              COUNT(*)::int AS messages, MAX(sent_at) AS last_at
+       FROM messages WHERE chat_id > 0
+       GROUP BY chat_id ORDER BY MAX(sent_at) DESC LIMIT $1`, [limit]);
+    return r.rows;
+  }
+
+  /// The chat whose title best matches a name, with its id.
+  async findChat(name) {
+    const r = await this.pool.query(
+      `SELECT chat_id, MAX(chat_title) AS chat_title FROM messages
+       WHERE chat_id > 0 AND (chat_title ILIKE '%' || $1 || '%' OR chat_username ILIKE '%' || $1 || '%')
+       GROUP BY chat_id ORDER BY MAX(sent_at) DESC LIMIT 1`, [name]);
+    return r.rows[0] ?? null;
+  }
+
+  /// A chat's messages, oldest first, for analysis.
+  async chatMessages(chatId, limit = 300) {
+    const r = await this.pool.query(
+      `SELECT sender_name, is_outgoing, sent_at, text, media_kind, deleted_at, edited_at
+       FROM messages WHERE chat_id = $1 ORDER BY sent_at DESC LIMIT $2`, [chatId, limit]);
+    return r.rows.reverse();
+  }
+
+  /// The latest messages across all private chats, for a general question.
+  async recentAcross(limit = 120) {
+    const r = await this.pool.query(
+      `SELECT chat_title, sender_name, is_outgoing, sent_at, text, media_kind
+       FROM messages WHERE chat_id > 0 AND text <> '' ORDER BY sent_at DESC LIMIT $1`, [limit]);
+    return r.rows.reverse();
+  }
+
   async stats() {
     const r = await this.pool.query(
       `SELECT COUNT(*)::int AS total,
