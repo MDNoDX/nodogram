@@ -99,6 +99,13 @@ export class Vault {
     if (!(await this.isOwnerConnection(message.business_connection_id))) return;
     const record = toRecord(message, this.config.ownerId);
     await this.db.saveMessage(record);
+    // Watched person wrote to you → a quiet heads-up in the log channel.
+    if (!record.isOutgoing && record.senderId) {
+      const label = await this.db.isWatched(record.senderId);
+      if (label !== null) {
+        await this.archive(`👁 <b>${escape(label || record.senderName)}</b> sizga yozdi:\n${escape((record.text || labelFor(record) || "").slice(0, 400))}`);
+      }
+    }
     // Keep the media now: after a deletion it may no longer be downloadable.
     // Copy-protected content is never copied (Telegram API terms).
     if (record.fileId && !record.isProtected && record.fileSize <= MAX_DOWNLOAD) {
@@ -116,7 +123,8 @@ export class Vault {
       message.edit_date ?? Math.floor(Date.now() / 1000), message);
     if (!result.known) { await this.db.saveMessage(record); return; }
     if (!record.isOutgoing && result.previous !== null) {
-      const notice = editedNotice(record.senderName || record.chatTitle, record.chatUsername, result.previous, record.text);
+      const mark = (await this.db.isWatched(record.senderId)) !== null ? "👁 " : "";
+      const notice = mark + editedNotice(record.senderName || record.chatTitle, record.chatUsername, result.previous, record.text);
       await this.archive(notice);
     }
   }
@@ -198,16 +206,18 @@ export class Vault {
       case "/start":
       case "/help":
         return this.notify(
-          "👋 <b>Nodogram Vault</b>\n" +
-          "I keep the messages people send you in private chats. When someone deletes or edits one, I show you what it said — text, photos, voice and files.\n\n" +
-          "<b>Set up:</b> Telegram → Settings → Account → Chat automation (older apps: Telegram Business → Chatbots) → add this bot for all 1-to-1 chats.\n\n" +
-          "Just write to me in plain language — I control your Telegram:\n\n" +
+          "👋 Men <b>Nodik</b> — sizning shaxsiy Telegram aqlingiz (JARVIS kabi). Odamlarni chin ko'zdan baholanaman, maslahat beraman va sizning Telegramingizni boshqaraman.\n\n" +
+          "<b>Sozlash:</b> Telegram → Settings → Account → Chat automation → bu botni barcha 1-to-1 chatlarga qo'shing. Shunda odamlar o'chirgan/tahrirlagan habarlarni ushlaб qolaman.\n\n" +
+          "Menga <b>oddiy tilda yozing</b> — komanda shart emas:\n" +
           "• “Hasan bilan chatimni tahlil qil, nima deb o'ylaysan?”\n" +
-          "• “@username kim, ma'lumot ber”\n" +
-          "• “Aliga shanbaga uchrashuv taklif qilib yoz”\n" +
-          "• “kim nimani o'chirdi?”, “kim menga yozmoqchi bo'ldi?”\n" +
+          "• “@username kim?” · “kim nimani o'chirdi?”\n" +
           "• “Dilnozaga 'rahmat, ertaga boraman' deb yubor”\n\n" +
-          "/reset — forget our conversation · /status · /deleted · /chats");
+          "<b>Qisqa komandalar:</b>\n" +
+          "/analyze <i>ism</i> — odamni chuqur tahlil\n" +
+          "/info <i>ism</i> — odam haqida ma'lumot\n" +
+          "/myinfo — mening faoliyatim\n" +
+          "/track <i>ism</i> — kuzatuvga olish · /watched · /untrack\n" +
+          "/search <i>so'z</i> · /status · /deleted · /reset");
       case "/status": {
         const s = await this.db.stats();
         const connections = await this.db.activeConnections();
@@ -224,74 +234,23 @@ export class Vault {
       }
       case "/search": {
         const q = (message.text ?? "").slice("/search".length).trim();
-        if (!q) return this.notify("Usage: /search <i>words</i>");
-        const rows = await this.db.search(q, 10);
-        if (!rows.length) return this.notify("No kept message matches.");
-        const lines = rows.map((r) => `• <b>${escape(r.sender_name || r.chat_title)}</b>: ${escape((r.text || labelFor(r)).slice(0, 160))}${r.deleted_at ? " 🗑" : ""}`);
-        return this.notify(lines.join("\n"));
+        if (!q) return this.notify("Usage: <code>/search words</code> — I search your kept messages.\n\n<i>Note: a bot can't search all of Telegram like MySearch (that needs a years-long private index). I search your own chats; for public channels/users by name, use Nodogram's global search.</i>");
+        return this.runAgent(`Search my kept messages for: ${q}. Show the best matches with who said them.`);
       }
-      case "/chats": {
-        const chats = await this.db.chats(30);
-        if (!chats.length) return this.notify("No private chats kept yet.");
-        const lines = chats.map((c) => `• <b>${escape(c.chat_title || "Chat")}</b> — ${c.messages} msgs`);
-        return this.notify("Chats I can analyse:\n" + lines.join("\n"));
-      }
-      case "/ai": {
-        const q = (message.text ?? "").slice(3).trim();
-        if (!this.ai) return this.notify("AI is off. Add a Gemini key in Nodogram → Settings → AI Assistant (it is shared with the bot).");
-        if (!q) return this.notify("Ask me anything about your chats, e.g. <code>/ai who is waiting for my reply?</code>");
-        await this.bot.call("sendChatAction", { chat_id: this.config.ownerId, action: "typing" }).catch(() => {});
-        try {
-          const context = await this.db.recentAcross(120);
-          const transcript = context.map((m) => `[${m.chat_title}] ${m.is_outgoing ? "Me" : "Them"}: ${(m.text || "").slice(0, 300)}`).join("\n");
-          const answer = await this.ai.generate({
-            system: "You are the user's sharp, warm personal assistant inside Telegram. Answer about their private chats using only the transcript. Be concise, honest and practical. Reply in the user's language (Uzbek Latin if unsure).",
-            prompt: `Recent messages across chats (latest last):\n${transcript}\n\nQuestion: ${q}`,
-          });
-          return this.notify(escape(answer));
-        } catch (error) {
-          return this.notify("AI error: " + escape(error.message));
-        }
-      }
-      case "/analyze": {
-        const name = (message.text ?? "").slice("/analyze".length).trim();
-        if (!this.ai) return this.notify("AI is off. Add a Gemini key in Nodogram → Settings → AI Assistant.");
-        if (!name) return this.notify("Usage: <code>/analyze name</code> — try /chats to see names.");
-        const chat = await this.db.findChat(name);
-        if (!chat) return this.notify(`No kept chat matches “${escape(name)}”. Try /chats.`);
-        await this.bot.call("sendChatAction", { chat_id: this.config.ownerId, action: "typing" }).catch(() => {});
-        try {
-          const msgs = await this.db.chatMessages(chat.chat_id, 300);
-          const transcript = msgs.map((m) => `${m.is_outgoing ? "Me" : "Them"}: ${(m.text || (m.media_kind ? "["+m.media_kind+"]" : "")).slice(0, 400)}${m.deleted_at ? " (deleted)" : ""}`).join("\n");
-          const answer = await this.ai.generate({
-            system: "You are a thoughtful relationship and communication coach. Read the real chat between Me and Them and help Me understand this person — honestly, kindly, grounded in the messages, never manipulative. Cover: how they feel toward Me, their interest level and whether it's rising or cooling, their personality and communication style, anything waiting for a reply, and 3-5 concrete tips. Reply in Uzbek Latin unless the chat is clearly another language.",
-            prompt: `Chat with ${chat.chat_title} (latest last):\n${transcript}`,
-          });
-          return this.notify(`<b>${escape(chat.chat_title)}</b>\n\n` + escape(answer));
-        } catch (error) {
-          return this.notify("AI error: " + escape(error.message));
-        }
-      }
-      case "/draft": {
-        const rest = (message.text ?? "").slice("/draft".length).trim();
-        if (!this.ai) return this.notify("AI is off. Add a Gemini key in Nodogram → Settings → AI Assistant.");
-        const [name, goal] = rest.split("|").map((s) => s.trim());
-        if (!name || !goal) return this.notify("Usage: <code>/draft name | your goal</code>\ne.g. <code>/draft Ali | shanbaga uchrashuv taklif qil</code>");
-        const chat = await this.db.findChat(name);
-        if (!chat) return this.notify(`No kept chat matches “${escape(name)}”. Try /chats.`);
-        await this.bot.call("sendChatAction", { chat_id: this.config.ownerId, action: "typing" }).catch(() => {});
-        try {
-          const msgs = await this.db.chatMessages(chat.chat_id, 120);
-          const transcript = msgs.map((m) => `${m.is_outgoing ? "Me" : "Them"}: ${(m.text || "").slice(0, 300)}`).join("\n");
-          const draft = await this.ai.generate({
-            system: "Write one message for Me to send, in Me's own style and language as seen in the chat. Honour the goal, fit the conversation, be warm and natural, never robotic. Reply with the message text only.",
-            prompt: `Chat with ${chat.chat_title} (latest last):\n${transcript}\n\nMy goal: ${goal}`,
-          });
-          return this.notify(`✍️ Draft for <b>${escape(chat.chat_title)}</b> — copy, edit and send it yourself:\n\n<code>${escape(draft)}</code>`);
-        } catch (error) {
-          return this.notify("AI error: " + escape(error.message));
-        }
-      }
+      case "/chats":
+        return this.runAgent("List my chats you can analyse, with message counts.");
+      case "/analyze":
+        return this.runAgent(`Deeply analyse my whole conversation with ${arg || "this person"} and tell me honestly what to do next. If no name was given, ask which person.`);
+      case "/info":
+        return this.runAgent(`Give me an honest profile of ${arg || "this person"}: look up their public info, and read my chat with them. Tell me who they are and how they are with me. If no name was given, ask who.`);
+      case "/myinfo":
+        return this.runAgent("Summarise MY own activity: how many chats, messages kept, deletions and edits caught, and my most active chats.");
+      case "/track":
+        return this.runAgent(`Add ${arg || "this person"} to my watchlist so I'm alerted when they write, edit or delete in our chat. If no name was given, ask who.`);
+      case "/untrack":
+        return this.runAgent(`Remove ${arg || "this person"} from my watchlist.`);
+      case "/watched":
+        return this.runAgent("Who is on my watchlist right now?");
       case "/reset":
         this.agentHistory = [];
         return this.notify("🧠 Conversation cleared.");
@@ -313,6 +272,10 @@ export class Vault {
       { name: "recent_edits", description: "Messages others edited, newest first.", parameters: { type: "OBJECT", properties: { limit: { type: "INTEGER" } } } },
       { name: "lookup_user", description: "Public Telegram info for a @username or t.me link.", parameters: { type: "OBJECT", properties: { username: { type: "STRING" } }, required: ["username"] } },
       { name: "send_message", description: "Send a message AS the user to one of their private chats, via the business connection. ONLY call this when the user, in their most recent message, explicitly asked to send this specific text to this specific person. Never invent a send.", parameters: { type: "OBJECT", properties: { name: { type: "STRING" }, text: { type: "STRING" } }, required: ["name", "text"] } },
+      { name: "my_summary", description: "The user's own stored activity: how many chats, messages kept, deletions and edits caught. Use for /myinfo questions about the user themself.", parameters: { type: "OBJECT", properties: {} } },
+      { name: "watch_person", description: "Add someone to the watchlist so the user is alerted (in their log channel) when that person writes to, edits or deletes in THEIR chat with the user. Name is a stored chat name or @username.", parameters: { type: "OBJECT", properties: { name: { type: "STRING" } }, required: ["name"] } },
+      { name: "unwatch_person", description: "Stop watching someone.", parameters: { type: "OBJECT", properties: { name: { type: "STRING" } }, required: ["name"] } },
+      { name: "list_watched", description: "People currently on the watchlist.", parameters: { type: "OBJECT", properties: {} } },
     ];
   }
 
@@ -347,6 +310,27 @@ export class Vault {
           return { id: chat.id, name: [chat.first_name, chat.last_name].filter(Boolean).join(" ") || chat.title, username: chat.username, bio: chat.bio, description: chat.description, type: chat.type };
         } catch (e) { return { error: "not found or private: " + e.message }; }
       }
+      if (name === "my_summary") {
+        const s = await this.db.stats();
+        const chats = await this.db.chats(1000);
+        return { chats_with: s.chats, messages_kept: s.total, deletions_caught: s.deleted, edits_caught: s.edited, top_chats: chats.slice(0, 15).map((c) => ({ name: c.chat_title, messages: c.messages })) };
+      }
+      if (name === "watch_person") {
+        const chat = await this.db.findChat(args.name);
+        if (!chat) return { error: "no stored chat matches that name; the user must have a private chat with them first" };
+        await this.db.watch(Number(chat.chat_id), { label: chat.chat_title });
+        return { watching: chat.chat_title, note: "You will be alerted in the log channel when they write/edit/delete in your chat." };
+      }
+      if (name === "unwatch_person") {
+        const chat = await this.db.findChat(args.name);
+        if (!chat) return { error: "no stored chat matches that name" };
+        const ok = await this.db.unwatch(Number(chat.chat_id));
+        return { unwatched: ok, name: chat.chat_title };
+      }
+      if (name === "list_watched") {
+        const rows = await this.db.watched();
+        return { watching: rows.map((r) => ({ name: r.label, since: r.added_at })) };
+      }
       if (name === "send_message") {
         const connections = await this.db.activeConnections();
         if (!connections.length) return { error: "no active business connection" };
@@ -366,13 +350,13 @@ export class Vault {
     if (!text.trim()) return this.notify("Menga oddiy tilda yozing — chatlaringizni tahlil qilaman, odamni o'rganaman, javob yozaman yoki yuboraman.");
     await this.bot.call("sendChatAction", { chat_id: this.config.ownerId, action: "typing" }).catch(() => {});
     const system = [
-      "You are the user's personal Telegram AI assistant, speaking with them privately in their bot.",
-      "Talk naturally in the user's language (Uzbek Latin if unsure). You control their Telegram through tools:",
-      "understand people from their chats, search, report what others deleted/edited, look up public @usernames,",
-      "draft replies in the user's own style, and — only when the user clearly asks — send a message as them.",
-      "Be warm, sharp, honest and concise. Ground claims in real messages (use tools to fetch them); never invent.",
-      "Before sending anything with send_message, make sure the user explicitly asked to send that exact message to",
-      "that exact person in their latest request; if unsure, ask them to confirm instead of sending.",
+      "Your name is Nodik — the user's private intelligence, in the spirit of Tony Stark's JARVIS: calm, razor-sharp, loyal, with real depth in human psychology and communication.",
+      "You speak with the user privately inside their own Telegram bot, naturally, in their language (Uzbek Latin if unsure). No slash commands are needed — just conversation.",
+      "You are a serious thinker, not a flatterer: you read people honestly from their actual messages, name patterns most miss, and give the user the clear-eyed truth and the best move — never empty reassurance, never manipulation.",
+      "You control the user's own Telegram through tools: understand people from their chats, search their kept messages, report what others deleted or edited, look up a public @username, summarise the user's own activity, keep a watchlist, draft replies in the user's own voice, and — only when the user explicitly asks — send a message as them.",
+      "Ground every claim about a person in real messages (fetch them with tools first); never invent. When you analyse someone, cover how they feel toward the user, their interest trend, their personality and communication style, what is waiting for a reply, and concrete next moves.",
+      "Honesty about limits: you only know the user's private chats and public profiles. You cannot see other people's groups, their messages elsewhere, their old usernames, story viewers or typing — that lives in the Nodogram app's logged-in session. Say so plainly when asked, don't pretend.",
+      "Before send_message, be certain the user asked to send that exact text to that exact person in their latest message; if unsure, show a draft and ask first.",
     ].join(" ");
     this.agentHistory.push({ role: "user", parts: [{ text }] });
     if (this.agentHistory.length > 24) this.agentHistory = this.agentHistory.slice(-24);

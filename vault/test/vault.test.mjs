@@ -36,6 +36,10 @@ class FakeDB {
     return out;
   }
   async markNotified() {}
+  async isWatched() { return null; }
+  async watch() {}
+  async unwatch() { return true; }
+  async watched() { return []; }
 }
 
 class FakeBot {

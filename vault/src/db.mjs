@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS messages_deleted ON messages (deleted_at DESC) WHERE deleted_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS messages_chat ON messages (chat_id, sent_at DESC);
+CREATE TABLE IF NOT EXISTS watchlist (
+  person_id   bigint PRIMARY KEY,
+  label       text NOT NULL DEFAULT '',
+  username    text NOT NULL DEFAULT '',
+  note        text NOT NULL DEFAULT '',
+  added_at    timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS message_versions (
   chat_id    bigint      NOT NULL,
   message_id bigint      NOT NULL,
@@ -216,6 +223,27 @@ export class VaultDB {
       `SELECT chat_title, sender_name, is_outgoing, sent_at, text, media_kind
        FROM messages WHERE chat_id > 0 AND text <> '' ORDER BY sent_at DESC LIMIT $1`, [limit]);
     return r.rows.reverse();
+  }
+
+  // ── Watchlist (your own vantage: a person's interactions with YOU) ──────
+  async watch(personId, { label = "", username = "", note = "" } = {}) {
+    await this.pool.query(
+      `INSERT INTO watchlist (person_id, label, username, note) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (person_id) DO UPDATE SET label=EXCLUDED.label, username=EXCLUDED.username, note=EXCLUDED.note`,
+      [personId, label, username, note]);
+  }
+  async unwatch(personId) {
+    const r = await this.pool.query(`DELETE FROM watchlist WHERE person_id=$1`, [personId]);
+    return r.rowCount > 0;
+  }
+  async watched() {
+    const r = await this.pool.query(`SELECT person_id, label, username, note, added_at FROM watchlist ORDER BY added_at DESC`);
+    return r.rows;
+  }
+  async isWatched(personId) {
+    if (personId == null) return null;
+    const r = await this.pool.query(`SELECT label FROM watchlist WHERE person_id=$1`, [personId]);
+    return r.rows[0]?.label ?? null;
   }
 
   async stats() {
