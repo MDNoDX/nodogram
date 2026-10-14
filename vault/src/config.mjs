@@ -43,11 +43,16 @@ export function loadConfig() {
     geminiKeyFile: get("GEMINI_KEY_FILE"),
     geminiKeyInline: get("GEMINI_KEY"),
   };
-  // The Gemini key for the bot AI: inline, or read from the app's key file.
-  config.geminiKey = config.geminiKeyInline || null;
-  if (!config.geminiKey && config.geminiKeyFile) {
-    try { config.geminiKey = fs.readFileSync(config.geminiKeyFile, "utf8").trim() || null; } catch { config.geminiKey = null; }
+  // Gemini key(s) for the bot AI. Several keys may be given (inline comma-/
+  // newline-separated, or one per line in the key file) and are rotated: each
+  // free key is ~20 requests/day, so more keys = more daily headroom.
+  const rawKeys = [];
+  if (config.geminiKeyInline) rawKeys.push(config.geminiKeyInline);
+  if (config.geminiKeyFile) {
+    try { rawKeys.push(fs.readFileSync(config.geminiKeyFile, "utf8")); } catch {}
   }
+  config.geminiKeys = rawKeys.join("\n").split(/[\n,]+/).map((k) => k.trim()).filter(Boolean);
+  config.geminiKey = config.geminiKeys[0] || null;
   const missing = ["botToken", "ownerId", "apiToken"].filter((k) => !config[k]);
   if (missing.length) throw new Error(`Missing configuration: ${missing.join(", ")} (see ${envFile})`);
   return config;

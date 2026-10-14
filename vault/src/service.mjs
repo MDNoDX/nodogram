@@ -8,7 +8,7 @@
 import path from "node:path";
 import { BotError } from "./telegram.mjs";
 import { deletedNotice, editedNotice, labelFor, resendMethod, toRecord } from "./content.mjs";
-import { Gemini } from "./gemini.mjs";
+import { Gemini, QuotaExceeded } from "./gemini.mjs";
 import { AppBridge } from "./appbridge.mjs";
 
 const ALLOWED_UPDATES = ["message", "business_connection", "business_message", "edited_business_message", "deleted_business_messages"];
@@ -22,7 +22,7 @@ export class Vault {
     this.log = log;
     this.ownerConnections = new Map();   // connection id → is owner's
     this.running = false;
-    this.ai = config.geminiKey ? new Gemini(config.geminiKey) : null;
+    this.ai = (config.geminiKeys && config.geminiKeys.length) ? new Gemini(config.geminiKeys) : null;
     this.app = new AppBridge(config.apiToken);   // live data from the running Nodogram app
     this.agentHistory = [];   // Gemini contents for the ongoing conversation
   }
@@ -370,7 +370,7 @@ export class Vault {
     this.agentHistory.push({ role: "user", parts: [{ text }] });
     if (this.agentHistory.length > 24) this.agentHistory = this.agentHistory.slice(-24);
     try {
-      for (let step = 0; step < 6; step++) {
+      for (let step = 0; step < 4; step++) {
         const content = await this.ai.turn({ system, contents: this.agentHistory, tools: this.agentTools });
         const call = content.parts?.find((p) => p.functionCall)?.functionCall;
         if (call) {
@@ -386,6 +386,10 @@ export class Vault {
       }
       return this.notify("Juda ko'p qadam bo'ldi — savolni soddalashtiring.");
     } catch (error) {
+      if (error instanceof QuotaExceeded) {
+        this.agentHistory.pop();   // don't keep the unanswered turn
+        return this.notify(`⏳ Bugungi bepul Gemini limiti tugadi (yangi kalitlar uchun kuniga ~20 so'rov). Taxminan <b>${escape(error.retryAfter)}</b> dan keyin tiklanadi.\n\nKo'proq ishlatish uchun: Nodogram → Settings → AI Assistant'ga yana bitta bepul Gemini kaliti qo'shing — men ularni navbat bilan ishlataman (har biri +20 so'rov/kun).`);
+      }
       return this.notify("AI error: " + escape(error.message));
     }
   }
