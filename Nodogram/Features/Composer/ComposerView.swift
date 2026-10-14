@@ -19,11 +19,16 @@ public struct ComposerView: View {
     private let isSavedMessages: Bool
     private let assistantReady: Bool
     private let onSuggest: () async throws -> [ReplySuggestion]
+    private let stickerSections: () async -> StickerSections
+    private let loadStickerThumb: (StickerPickItem) async -> String?
+    private let onSendSticker: (StickerPickItem) -> Void
+    private let onClearRecentStickers: () -> Void
 
     @State private var scheduling = false
     @State private var suggesting = false
     @State private var suggestions: [ReplySuggestion] = []
     @State private var showSuggestions = false
+    @State private var showStickers = false
     @State private var suggestError: String?
     @State private var scheduleDate = Date().addingTimeInterval(3600)
     @FocusState private var isFocused: Bool
@@ -40,12 +45,20 @@ public struct ComposerView: View {
         onSend: @escaping () -> Void,
         onSendWithOptions: @escaping (Bool, Date?) -> Void = { _, _ in },
         assistantReady: Bool = false,
-        onSuggest: @escaping () async throws -> [ReplySuggestion] = { [] }
+        onSuggest: @escaping () async throws -> [ReplySuggestion] = { [] },
+        stickerSections: @escaping () async -> StickerSections = { StickerSections() },
+        loadStickerThumb: @escaping (StickerPickItem) async -> String? = { _ in nil },
+        onSendSticker: @escaping (StickerPickItem) -> Void = { _ in },
+        onClearRecentStickers: @escaping () -> Void = {}
     ) {
         self.onSendWithOptions = onSendWithOptions
         self.isSavedMessages = isSavedMessages
         self.assistantReady = assistantReady
         self.onSuggest = onSuggest
+        self.stickerSections = stickerSections
+        self.loadStickerThumb = loadStickerThumb
+        self.onSendSticker = onSendSticker
+        self.onClearRecentStickers = onClearRecentStickers
         self.chatID = chatID
         self._text = text
         self.draftIndicatorVisible = draftIndicatorVisible
@@ -86,6 +99,17 @@ public struct ComposerView: View {
             }
 
             HStack(alignment: .bottom, spacing: 10) {
+                Button { showStickers.toggle() } label: {
+                    Image(systemName: "face.smiling")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Stickers & GIFs")
+                .popover(isPresented: $showStickers, arrowEdge: .top) {
+                    StickerPickerView(sections: stickerSections, loadThumb: loadStickerThumb,
+                                      onPick: onSendSticker, onClearRecent: onClearRecentStickers)
+                }
                 Button(action: pickFiles) {
                     Image(systemName: "paperclip")
                         .font(.system(size: 16))

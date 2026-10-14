@@ -56,6 +56,7 @@ struct DataStoragePage: View {
     @State private var confirmingClear = false
     @State private var clearing = false
     @State private var confirmClearGIFs = false
+    @State private var confirmClearStickers = false
 
     var body: some View {
         SettingsForm {
@@ -91,6 +92,7 @@ struct DataStoragePage: View {
                 }
                 Toggle("Also copy every downloaded file here", isOn: $autoSave)
                 Button("Clear All Saved GIFs…") { confirmClearGIFs = true }
+                Button("Clear Recent Stickers…") { confirmClearStickers = true }
             } header: { Text("Downloads") } footer: {
                 SettingsNote("“Save” and “Show in Finder” copy files here. Media in chats that forbid saving is never copied. Use “Save As…” on any file to pick a place each time.")
             }
@@ -99,6 +101,9 @@ struct DataStoragePage: View {
         .confirmationDialog("Clear all saved GIFs?", isPresented: $confirmClearGIFs, titleVisibility: .visible) {
             Button("Clear GIFs", role: .destructive) { Task { _ = await model.clearSavedGIFs() } }
         } message: { Text("Removes every GIF from your saved GIFs on Telegram, on all your devices.") }
+        .confirmationDialog("Clear recent stickers?", isPresented: $confirmClearStickers, titleVisibility: .visible) {
+            Button("Clear Recent Stickers", role: .destructive) { model.clearRecentStickers() }
+        } message: { Text("Empties your recently-used stickers list on Telegram.") }
         .confirmationDialog("Clear the media cache?", isPresented: $confirmingClear, titleVisibility: .visible) {
             Button("Clear Cache", role: .destructive) {
                 clearing = true

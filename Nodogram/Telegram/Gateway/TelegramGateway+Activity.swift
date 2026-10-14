@@ -191,6 +191,70 @@ extension TelegramGateway {
 
 extension TelegramGateway {
 
+    // MARK: - Stickers & GIFs (picker)
+
+    public func favoriteStickers() async -> [StickerPickItem] {
+        await stickerItems { try await self.client.getFavoriteStickers().stickers }
+    }
+    public func recentStickers() async -> [StickerPickItem] {
+        await stickerItems { try await self.client.getRecentStickers(isAttached: false).stickers }
+    }
+    public func savedGIFItems() async -> [StickerPickItem] {
+        (try? await run {
+            let gifs = try await self.client.getSavedAnimations().animations
+            return gifs.map { gif in
+                StickerPickItem(id: gif.animation.remote.id, kind: .gif,
+                                thumbFileID: gif.thumbnail?.file.id ?? gif.animation.id,
+                                emoji: "", isAnimated: true)
+            }
+        }) ?? []
+    }
+
+    private func stickerItems(_ fetch: @escaping () async throws -> [Sticker]) async -> [StickerPickItem] {
+        (try? await run {
+            let stickers = try await fetch()
+            return stickers.map { s in
+                let animated = { if case .stickerFormatWebp = s.format { return false } else { return true } }()
+                return StickerPickItem(id: s.sticker.remote.id, kind: .sticker,
+                                       thumbFileID: s.thumbnail?.file.id ?? s.sticker.id,
+                                       emoji: s.emoji, isAnimated: animated)
+            }
+        }) ?? []
+    }
+
+    /// Sends a sticker (by remote file id) to a chat.
+    public func sendSticker(_ remoteID: String, to chat: ChatID) async throws(DomainError) {
+        try await run {
+            let content = InputMessageContent.inputMessageSticker(InputMessageSticker(
+                emoji: "",
+                sticker: InputSticker(height: 0, sticker: .inputFileRemote(InputFileRemote(id: remoteID)),
+                                      thumbnail: nil, width: 0)))
+            _ = try await self.client.sendMessage(chatId: chat.rawValue, inputMessageContent: content,
+                                                  options: nil, replyMarkup: nil, replyTo: nil, topicId: nil)
+        }
+    }
+
+    /// Sends a saved GIF (by remote file id) to a chat.
+    public func sendGIF(_ remoteID: String, to chat: ChatID) async throws(DomainError) {
+        try await run {
+            let content = InputMessageContent.inputMessageAnimation(InputMessageAnimation(
+                animation: InputAnimation(addedStickerFileIds: [], animation: .inputFileRemote(InputFileRemote(id: remoteID)),
+                                          duration: 0, height: 0, thumbnail: nil, width: 0),
+                caption: nil, hasSpoiler: false, showCaptionAboveMedia: false))
+            _ = try await self.client.sendMessage(chatId: chat.rawValue, inputMessageContent: content,
+                                                  options: nil, replyMarkup: nil, replyTo: nil, topicId: nil)
+        }
+    }
+
+    /// Clears the recently-used stickers list. Returns how many were there.
+    public func clearRecentStickersList() async -> Int {
+        (try? await run {
+            let n = (try? await self.client.getRecentStickers(isAttached: false).stickers.count) ?? 0
+            _ = try? await self.client.clearRecentStickers(isAttached: false)
+            return n
+        }) ?? 0
+    }
+
     /// Removes every saved GIF. Returns how many were cleared.
     public func clearSavedGIFs() async throws(DomainError) -> Int {
         try await run {

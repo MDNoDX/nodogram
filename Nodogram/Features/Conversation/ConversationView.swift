@@ -160,7 +160,11 @@ public struct ConversationView: View {
                 onSend: { model.sendFromComposer() },
                 onSendWithOptions: { silent, date in model.submitComposer(silent: silent, scheduleAt: date) },
                 assistantReady: model.assistantReady && model.assistantAllowed(in: chat) == nil,
-                onSuggest: { try await model.suggestReplies() }
+                onSuggest: { try await model.suggestReplies() },
+                stickerSections: { await model.stickerSections() },
+                loadStickerThumb: { await model.stickerThumb($0) },
+                onSendSticker: { model.sendSticker($0, to: chat.id) },
+                onClearRecentStickers: { model.clearRecentStickers() }
             )
         }
     }
