@@ -50,6 +50,8 @@ public final class AppModel {
     public internal(set) var chatsByID: [ChatID: Chat] = [:]
     public private(set) var isLoadingChats = false
     public private(set) var myUserID: UserID?
+    /// Your own usernames (lowercased), to spot when someone mentions you.
+    public internal(set) var myUsernames: [String] = []
     public var selectedDestination: SidebarDestination = .allChats {
         didSet {
             selectedFolderID = nil
@@ -369,6 +371,7 @@ public final class AppModel {
             record([message])
             noteMessageForTyping(message)
             checkKeywords(message)
+            checkGroupReaction(message)
             appendToCommentsIfNeeded(message)
             guard message.chatID == selectedChatID,
                   !messages.contains(where: { $0.id == message.id }) else { return }
@@ -520,6 +523,7 @@ public final class AppModel {
             guard let me = try? await gateway.myUserID() else { return }
             self?.myUserID = me
             if let profile = try? await gateway.profile() { self?.rememberAccountName(profile.displayName) }
+            if let mine = await gateway.personProfile(me) { self?.myUsernames = mine.usernames.map { $0.lowercased() } }
             // "Saved" must work even when Saved Messages is not among the
             // chats loaded so far.
             await gateway.ensurePrivateChat(with: me)

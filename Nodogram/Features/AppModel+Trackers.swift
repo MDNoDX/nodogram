@@ -364,3 +364,20 @@ extension AppModel {
         StoryViewersStore.save([])
     }
 }
+
+extension AppModel {
+    /// Someone mentioned you (@username) in a group or channel you are in — a
+    /// reaction worth knowing about, so you can hop online. Posted to the log
+    /// channel. Only groups/channels (negative ids); private chats are covered
+    /// by Telegram's own notifications and the watchlist.
+    func checkGroupReaction(_ message: Message) {
+        guard message.chatID.rawValue < 0, !message.isOutgoing, !message.isService,
+              !message.text.isEmpty, !myUsernames.isEmpty else { return }
+        let text = message.text.lowercased()
+        guard myUsernames.contains(where: { text.contains("@\($0)") }) else { return }
+        let group = chatsByID[message.chatID]?.title ?? "a group"
+        let who = message.senderName.isEmpty ? group : message.senderName
+        archiveToChannel("💬 <b>\(Self.htmlEscape(who))</b> mentioned you in <b>\(Self.htmlEscape(group))</b>:\n\(Self.htmlEscape(String(message.text.prefix(300)))) · \(Self.stamp())",
+                         dedupe: "mention-\(message.chatID.rawValue)-\(message.id.rawValue)")
+    }
+}
