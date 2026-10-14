@@ -9,6 +9,7 @@ import path from "node:path";
 import { BotError } from "./telegram.mjs";
 import { deletedNotice, editedNotice, labelFor, resendMethod, toRecord } from "./content.mjs";
 import { Gemini } from "./gemini.mjs";
+import { AppBridge } from "./appbridge.mjs";
 
 const ALLOWED_UPDATES = ["message", "business_connection", "business_message", "edited_business_message", "deleted_business_messages"];
 const MAX_DOWNLOAD = 20 * 1024 * 1024;   // Bot API getFile limit
@@ -22,6 +23,7 @@ export class Vault {
     this.ownerConnections = new Map();   // connection id → is owner's
     this.running = false;
     this.ai = config.geminiKey ? new Gemini(config.geminiKey) : null;
+    this.app = new AppBridge(config.apiToken);   // live data from the running Nodogram app
     this.agentHistory = [];   // Gemini contents for the ongoing conversation
   }
 
@@ -276,6 +278,9 @@ export class Vault {
       { name: "watch_person", description: "Add someone to the watchlist so the user is alerted (in their log channel) when that person writes to, edits or deletes in THEIR chat with the user. Name is a stored chat name or @username.", parameters: { type: "OBJECT", properties: { name: { type: "STRING" } }, required: ["name"] } },
       { name: "unwatch_person", description: "Stop watching someone.", parameters: { type: "OBJECT", properties: { name: { type: "STRING" } }, required: ["name"] } },
       { name: "list_watched", description: "People currently on the watchlist.", parameters: { type: "OBJECT", properties: {} } },
+      { name: "person_info", description: "Rich profile of a person from the user's logged-in Nodogram session: their public profile, the groups the user shares with them, their recent messages in those shared groups, and username history. Use a @username, name or numeric id. Needs the Nodogram app to be open.", parameters: { type: "OBJECT", properties: { who: { type: "STRING" } }, required: ["who"] } },
+      { name: "my_info", description: "The user's own account picture from Nodogram: their groups, channels, groups they own, groups they left, and usernames. Needs the Nodogram app to be open.", parameters: { type: "OBJECT", properties: {} } },
+      { name: "global_search", description: "Search Telegram beyond the user's private chats — public channels, groups, people by name, and messages — via the user's Nodogram session. Needs the Nodogram app to be open. (A bot alone cannot index all of Telegram.)", parameters: { type: "OBJECT", properties: { query: { type: "STRING" } }, required: ["query"] } },
     ];
   }
 
@@ -339,6 +344,9 @@ export class Vault {
         await this.bot.call("sendMessage", { business_connection_id: connections[0].id, chat_id: Number(chat.chat_id), text: args.text });
         return { sent: true, to: chat.chat_title };
       }
+      if (name === "person_info") return await this.app.info(args.who || "");
+      if (name === "my_info") return await this.app.myInfo();
+      if (name === "global_search") return await this.app.search(args.query || "");
       return { error: "unknown tool" };
     } catch (error) {
       return { error: error.message };
@@ -355,7 +363,8 @@ export class Vault {
       "You are a serious thinker, not a flatterer: you read people honestly from their actual messages, name patterns most miss, and give the user the clear-eyed truth and the best move — never empty reassurance, never manipulation.",
       "You control the user's own Telegram through tools: understand people from their chats, search their kept messages, report what others deleted or edited, look up a public @username, summarise the user's own activity, keep a watchlist, draft replies in the user's own voice, and — only when the user explicitly asks — send a message as them.",
       "Ground every claim about a person in real messages (fetch them with tools first); never invent. When you analyse someone, cover how they feel toward the user, their interest trend, their personality and communication style, what is waiting for a reply, and concrete next moves.",
-      "Honesty about limits: you only know the user's private chats and public profiles. You cannot see other people's groups, their messages elsewhere, their old usernames, story viewers or typing — that lives in the Nodogram app's logged-in session. Say so plainly when asked, don't pretend.",
+      "For richer questions you can reach the user's logged-in Nodogram session with person_info (someone's profile + shared groups + their messages there + username history), my_info (the user's own groups/channels/owned/left/usernames) and global_search (public channels, groups, people, messages across Telegram). These need the Nodogram app open on the Mac — if a call comes back offline, tell the user to open Nodogram, and meanwhile answer from your own stored private-chat data.",
+      "Everything you surface is what Telegram already shows the user from their own account — their chats, their groups, and the public side of people they share groups with. You never fabricate a person's whereabouts or activity you cannot actually see.",
       "Before send_message, be certain the user asked to send that exact text to that exact person in their latest message; if unsure, show a draft and ask first.",
     ].join(" ");
     this.agentHistory.push({ role: "user", parts: [{ text }] });

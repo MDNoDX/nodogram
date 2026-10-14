@@ -115,6 +115,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Ensure a window is visible shortly after launch (retries, since the
         // opener action is captured once the menu bar label renders).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { WindowOpener.shared.ensureWindow() }
+        // Serve live data to the Vault bot (loopback, token-authenticated).
+        AppControlServer.shared.start(model: AppModel.shared)
     }
 
 }
