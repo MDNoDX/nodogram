@@ -7,7 +7,7 @@
 // on a 429 — that's a daily cap, not a blip — and (d) surface a clear quota
 // error the bot can explain, instead of a vague "unavailable".
 
-const MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest"];
+const MODELS = ["gemini-flash-lite-latest", "gemini-flash-latest"];
 
 export class QuotaExceeded extends Error {
   constructor(retryAfter) { super("quota"); this.name = "QuotaExceeded"; this.retryAfter = retryAfter; }
