@@ -372,16 +372,24 @@ export class Vault {
     try {
       for (let step = 0; step < 4; step++) {
         const content = await this.ai.turn({ system, contents: this.agentHistory, tools: this.agentTools });
-        const call = content.parts?.find((p) => p.functionCall)?.functionCall;
-        if (call) {
-          this.agentHistory.push({ role: "model", parts: [{ functionCall: call }] });
-          const result = await this.runTool(call.name, call.args || {});
-          this.agentHistory.push({ role: "user", parts: [{ functionResponse: { name: call.name, response: result } }] });
-          if (call.name === "send_message") await this.bot.call("sendChatAction", { chat_id: this.config.ownerId, action: "typing" }).catch(() => {});
+        const parts = content.parts || [];
+        const calls = parts.filter((p) => p.functionCall).map((p) => p.functionCall);
+        if (calls.length) {
+          // Push the model's turn VERBATIM — Gemini 3.x attaches a
+          // thoughtSignature to each functionCall part, and it must be sent
+          // back unchanged or the next turn fails ("missing thought_signature").
+          this.agentHistory.push({ role: content.role || "model", parts });
+          const responses = [];
+          for (const call of calls) {
+            const result = await this.runTool(call.name, call.args || {});
+            responses.push({ functionResponse: { name: call.name, response: result } });
+            if (call.name === "send_message") await this.bot.call("sendChatAction", { chat_id: this.config.ownerId, action: "typing" }).catch(() => {});
+          }
+          this.agentHistory.push({ role: "user", parts: responses });
           continue;
         }
-        const answer = (content.parts || []).map((p) => p.text).filter(Boolean).join("").trim();
-        this.agentHistory.push({ role: "model", parts: [{ text: answer || "…" }] });
+        const answer = parts.map((p) => p.text).filter(Boolean).join("").trim();
+        this.agentHistory.push({ role: content.role || "model", parts: parts.length ? parts : [{ text: answer || "…" }] });
         return this.notify(escape(answer || "Tushunmadim, qayta yozing."));
       }
       return this.notify("Juda ko'p qadam bo'ldi — savolni soddalashtiring.");
