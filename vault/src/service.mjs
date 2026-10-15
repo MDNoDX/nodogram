@@ -33,6 +33,7 @@ export class Vault {
     this.running = true;
     // Long polling and a webhook cannot both be active.
     await this.bot.call("deleteWebhook", { drop_pending_updates: false });
+    await this.registerCommands();
     let offset = Number(await this.db.getState("offset", "0"));
     this.log.info?.("[vault] polling");
     while (this.running) {
@@ -261,6 +262,28 @@ export class Vault {
         // decides what to do (analyse, search, look up, draft, send…).
         return this.runAgent(message.text ?? "");
     }
+  }
+
+  /// Publishes the bot's command menu (what BotFather shows). Only commands
+  /// that actually have handlers are listed — the menu never advertises a
+  /// feature that is not implemented.
+  async registerCommands() {
+    const commands = [
+      ["start", "Nodikni ishga tushirish"],
+      ["help", "Barcha imkoniyatlar va qo'llanma"],
+      ["search", "Saqlangan xabarlarni qidirish"],
+      ["chats", "Suhbatlar ro'yxati"],
+      ["myinfo", "Mening akkauntim (guruhlar, kanallar)"],
+      ["info", "Odam yoki chat haqida ma'lumot"],
+      ["track", "Kuzatuvga olish"],
+      ["watched", "Kuzatuvlar ro'yxati"],
+      ["analyze", "Suhbatni chuqur tahlil qilish"],
+      ["deleted", "O'chirilgan xabarlar arxivi"],
+      ["status", "Bot va ulanish holati"],
+      ["reset", "Suhbat kontekstini tozalash"],
+    ].map(([command, description]) => ({ command, description }));
+    try { await this.bot.call("setMyCommands", { commands }); this.log.info?.("[vault] command menu published"); }
+    catch (error) { this.log.warn?.("[vault] setMyCommands failed:", error.message); }
   }
 
   // ── Conversational agent ────────────────────────────────────────────────
