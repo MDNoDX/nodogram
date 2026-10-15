@@ -156,3 +156,40 @@ extension TelegramGateway {
         return ""
     }
 }
+
+extension TelegramGateway {
+    /// Resolves a person from a @username, numeric id, or a saved contact /
+    /// chat name — searching the user's own chats and contacts as well as
+    /// public usernames, so someone saved as "M.BRO" resolves too.
+    public func resolvePerson(_ query: String) async -> UserID? {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return nil }
+        // Pure numeric → treat as a user id directly.
+        if q.allSatisfy(\.isNumber), let raw = Int64(q) { return UserID(raw) }
+        let handle = q.hasPrefix("@") ? String(q.dropFirst()) : q
+
+        // 1) The user's own chats (includes contacts they have a chat with).
+        if let chats = try? await client.searchChats(limit: 10, query: handle, typeFilter: nil) {
+            if let id = chats.chatIds.first(where: { $0 > 0 }) { return UserID(id) }
+        }
+        // 2) The user's contacts, by name — even without an existing chat.
+        if let users = try? await client.searchContacts(limit: 10, query: handle) {
+            if let id = users.userIds.first { return UserID(id) }
+        }
+        // 3) Public usernames / channels.
+        if let pub = try? await client.searchPublicChats(query: handle, typeFilter: nil) {
+            if let id = pub.chatIds.first(where: { $0 > 0 }) { return UserID(id) }
+        }
+        return nil
+    }
+
+    /// Minimal identity for the resolve endpoint.
+    public func personBrief(_ user: UserID) async -> (title: String, username: String)? {
+        guard let profile = await personProfile(user) else {
+            if let chat = await resolveChat(ChatID(user.rawValue)) { return (chat.title, "") }
+            return nil
+        }
+        let name = [profile.firstName, profile.lastName].filter { !$0.isEmpty }.joined(separator: " ")
+        return (name.isEmpty ? (profile.usernames.first ?? "User") : name, profile.usernames.first ?? "")
+    }
+}

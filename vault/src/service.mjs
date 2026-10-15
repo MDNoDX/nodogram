@@ -11,7 +11,7 @@ import { deletedNotice, editedNotice, labelFor, resendMethod, toRecord } from ".
 import { Gemini, QuotaExceeded } from "./gemini.mjs";
 import { AppBridge } from "./appbridge.mjs";
 
-const ALLOWED_UPDATES = ["message", "business_connection", "business_message", "edited_business_message", "deleted_business_messages"];
+const ALLOWED_UPDATES = ["message", "business_connection", "business_message", "edited_business_message", "deleted_business_messages", "inline_query"];
 const MAX_DOWNLOAD = 20 * 1024 * 1024;   // Bot API getFile limit
 
 export class Vault {
@@ -65,6 +65,62 @@ export class Vault {
     if (update.edited_business_message) return this.onEdit(update.edited_business_message);
     if (update.deleted_business_messages) return this.onDeleted(update.deleted_business_messages);
     if (update.message) return this.onDirect(update.message);
+    if (update.inline_query) return this.onInlineQuery(update.inline_query);
+  }
+
+  // ── Inline mode: @MDNoDX_bot <matn> anywhere → ready-to-send reply variants ──
+
+  async onInlineQuery(iq) {
+    if (iq.from?.id !== this.config.ownerId) {
+      // Only the owner may use it; show nothing to anyone else.
+      return this.bot.call("answerInlineQuery", { inline_query_id: iq.id, results: [], cache_time: 5, is_personal: true }).catch(() => {});
+    }
+    const q = (iq.query || "").trim();
+    if (!this.ai || q.length < 3) {
+      return this.bot.call("answerInlineQuery", {
+        inline_query_id: iq.id, cache_time: 5, is_personal: true,
+        results: [{ type: "article", id: "hint", title: "Nodik — javob variantlari",
+          description: "Yozing: nimaga javob kerakligini yoki maqsadingizni. Masalan: 'rad et', 'rahmat ayt', 'uchrashuvga chaqir'",
+          input_message_content: { message_text: q || "" } }],
+      }).catch(() => {});
+    }
+    // Quota guard: cache by query, and don't call the model more than once/2s.
+    this._inlineCache = this._inlineCache || new Map();
+    const cached = this._inlineCache.get(q);
+    if (cached && Date.now() - cached.at < 600_000) return this.answerInline(iq.id, cached.variants);
+    const now = Date.now();
+    if (this._lastInlineAt && now - this._lastInlineAt < 2000) {
+      // Too soon (still typing) — offer the raw text so nothing blocks, no AI call.
+      return this.bot.call("answerInlineQuery", { inline_query_id: iq.id, cache_time: 2, is_personal: true,
+        results: [{ type: "article", id: "raw", title: "Yuborish: " + q.slice(0, 40), description: "Nodik variantlari uchun yozishni tugating…",
+          input_message_content: { message_text: q } }] }).catch(() => {});
+    }
+    this._lastInlineAt = now;
+    try {
+      const out = await this.ai.generate({
+        system: "Foydalanuvchi Telegramda inline rejimda yordam so'rayapti. Uning so'rovi/maqsadi asosida YUBORISHGA TAYYOR 3 ta qisqa javob variantini yoz. Har biri bitta qatorda, alohida, raqamsiz. O'zbekcha, tabiiy, hozirgi ohangga mos. Faqat variantlarni ber, boshqa hech narsa yozma.",
+        prompt: q,
+        temperature: 0.9,
+      });
+      const variants = out.split(/\n+/).map((l) => l.replace(/^\s*[-*\d.)\]]+\s*/, "").trim()).filter((l) => l.length > 0).slice(0, 5);
+      if (variants.length) this._inlineCache.set(q, { at: Date.now(), variants });
+      return this.answerInline(iq.id, variants.length ? variants : [q]);
+    } catch (error) {
+      return this.bot.call("answerInlineQuery", { inline_query_id: iq.id, cache_time: 5, is_personal: true,
+        results: [{ type: "article", id: "err", title: "AI hozir javob berolmadi",
+          description: error instanceof QuotaExceeded ? "Kunlik limit tugadi" : "Qayta urinib ko'ring",
+          input_message_content: { message_text: q } }] }).catch(() => {});
+    }
+  }
+
+  async answerInline(id, variants) {
+    const results = variants.slice(0, 5).map((text, i) => ({
+      type: "article", id: "v" + i,
+      title: text.slice(0, 60),
+      description: "Yuborish uchun bosing",
+      input_message_content: { message_text: text },
+    }));
+    return this.bot.call("answerInlineQuery", { inline_query_id: id, results, cache_time: 10, is_personal: true }).catch(() => {});
   }
 
   // ── Business updates ──────────────────────────────────────────────────────
@@ -194,6 +250,12 @@ export class Vault {
         link_preview_options: { is_disabled: true },
       });
     } catch (error) {
+      // Malformed HTML → resend as plain text so the user still gets the answer.
+      if (error instanceof BotError && error.code === 400 && /parse|entity|tag/i.test(error.message || "")) {
+        const plain = String(html).replace(/<[^>]+>/g, "");
+        try { await this.bot.call("sendMessage", { chat_id: this.config.ownerId, text: plain, link_preview_options: { is_disabled: true } }); return; }
+        catch { /* fall through to the handler below */ }
+      }
       if (error instanceof BotError && error.code === 403) {
         this.log.warn?.("[vault] the owner hasn't started the bot yet — open it in Telegram and press Start");
       } else {
@@ -209,7 +271,7 @@ export class Vault {
       case "/start":
       case "/help":
         return this.notify(
-          "👋 Men <b>Nodik</b> — sizning shaxsiy Telegram aqlingiz (JARVIS kabi). Odamlarni chin ko'zdan baholanaman, maslahat beraman va sizning Telegramingizni boshqaraman.\n\n" +
+          "👋 Men <b>Nodik</b> — sizning shaxsiy Telegram yordamchingiz. Odamlarni chin ko'zdan baholayman, maslahat beraman va Telegramingizni boshqarishga yordamlashaman.\n\n" +
           "<b>Sozlash:</b> Telegram → Settings → Account → Chat automation → bu botni barcha 1-to-1 chatlarga qo'shing. Shunda odamlar o'chirgan/tahrirlagan habarlarni ushlaб qolaman.\n\n" +
           "Menga <b>oddiy tilda yozing</b> — komanda shart emas:\n" +
           "• “Hasan bilan chatimni tahlil qil, nima deb o'ylaysan?”\n" +
@@ -344,16 +406,25 @@ export class Vault {
         return { chats_with: s.chats, messages_kept: s.total, deletions_caught: s.deleted, edits_caught: s.edited, top_chats: chats.slice(0, 15).map((c) => ({ name: c.chat_title, messages: c.messages })) };
       }
       if (name === "watch_person") {
+        let id = null, label = null;
         const chat = await this.db.findChat(args.name);
-        if (!chat) return { error: "no stored chat matches that name; the user must have a private chat with them first" };
-        await this.db.watch(Number(chat.chat_id), { label: chat.chat_title });
-        return { watching: chat.chat_title, note: "You will be alerted in the log channel when they write/edit/delete in your chat." };
+        if (chat) { id = Number(chat.chat_id); label = chat.chat_title; }
+        else {
+          const r = await this.app.resolve(args.name);   // contacts / @username / name via the app
+          if (r && r.found) { id = Number(r.userId); label = r.title || args.name; }
+        }
+        if (id === null) return { error: "could not find that person in your chats, contacts or by @username. Open Nodogram if it is closed." };
+        await this.db.watch(id, { label });
+        return { watching: label, note: "Siz bilan chatda yozsa/tahrirlasa/o'chirsa kanalga xabar beraman." };
       }
       if (name === "unwatch_person") {
+        let id = null, label = args.name;
         const chat = await this.db.findChat(args.name);
-        if (!chat) return { error: "no stored chat matches that name" };
-        const ok = await this.db.unwatch(Number(chat.chat_id));
-        return { unwatched: ok, name: chat.chat_title };
+        if (chat) { id = Number(chat.chat_id); label = chat.chat_title; }
+        else { const r = await this.app.resolve(args.name); if (r && r.found) { id = Number(r.userId); label = r.title || args.name; } }
+        if (id === null) return { error: "not found" };
+        const ok = await this.db.unwatch(id);
+        return { unwatched: ok, name: label };
       }
       if (name === "list_watched") {
         const rows = await this.db.watched();
@@ -381,14 +452,15 @@ export class Vault {
     if (!text.trim()) return this.notify("Menga oddiy tilda yozing — chatlaringizni tahlil qilaman, odamni o'rganaman, javob yozaman yoki yuboraman.");
     await this.bot.call("sendChatAction", { chat_id: this.config.ownerId, action: "typing" }).catch(() => {});
     const system = [
-      "Your name is Nodik — the user's private intelligence, in the spirit of Tony Stark's JARVIS: calm, razor-sharp, loyal, with real depth in human psychology and communication.",
-      "You speak with the user privately inside their own Telegram bot, naturally, in their language (Uzbek Latin if unsure). No slash commands are needed — just conversation.",
-      "You are a serious thinker, not a flatterer: you read people honestly from their actual messages, name patterns most miss, and give the user the clear-eyed truth and the best move — never empty reassurance, never manipulation.",
+      "Sening isming Nodik — foydalanuvchining shaxsiy aqlli yordamchisi. Egang — Nodirbek. U bilan har doim O'ZBEK TILIDA (lotin), tabiiy va samimiy gaplash.",
+      "Doim o'zbekcha javob ber. Faqat foydalanuvchining o'zi boshqa tilni so'rasa yoki yozsa, o'sha tilda javob ber. Komanda shart emas — oddiy suhbat kifoya.",
+      "Sen xushomadchi emas, halol va o'tkir tahlilchisan: odamlarni ularning haqiqiy xabarlari asosida baholaysan, ko'pchilik sezmaydigan naqshlarni ko'rsatasan, va aniq, rost xulosa hamda eng yaxshi keyingi qadamni aytasan — quruq ko'ngilxushlik emas.",
       "You control the user's own Telegram through tools: understand people from their chats, search their kept messages, report what others deleted or edited, look up a public @username, summarise the user's own activity, keep a watchlist, draft replies in the user's own voice, and — only when the user explicitly asks — send a message as them.",
       "Ground every claim about a person in real messages (fetch them with tools first); never invent. When you analyse someone, cover how they feel toward the user, their interest trend, their personality and communication style, what is waiting for a reply, and concrete next moves.",
       "For richer questions you can reach the user's logged-in Nodogram session with person_info (someone's profile + shared groups + their messages there + username history), my_info (the user's own groups/channels/owned/left/usernames) and global_search (public channels, groups, people, messages across Telegram). These need the Nodogram app open on the Mac — if a call comes back offline, tell the user to open Nodogram, and meanwhile answer from your own stored private-chat data.",
       "Everything you surface is what Telegram already shows the user from their own account — their chats, their groups, and the public side of people they share groups with. You never fabricate a person's whereabouts or activity you cannot actually see.",
-      "Before send_message, be certain the user asked to send that exact text to that exact person in their latest message; if unsure, show a draft and ask first.",
+      "send_message'dan oldin: foydalanuvchi aynan o'sha matnni aynan o'sha odamga yuborishni so'raganiga amin bo'l; shubha bo'lsa, avval qoralamani ko'rsatib so'ra.",
+      "MUHIM: javoblaringni toza yoz. Markdown ishlatsang oddiy ishlat (**qalin**, - ro'yxat). Javob o'zbekcha, qisqa va aniq bo'lsin.",
     ].join(" ");
     this.agentHistory.push({ role: "user", parts: [{ text }] });
     if (this.agentHistory.length > 24) this.agentHistory = this.agentHistory.slice(-24);
@@ -413,7 +485,7 @@ export class Vault {
         }
         const answer = parts.map((p) => p.text).filter(Boolean).join("").trim();
         this.agentHistory.push({ role: content.role || "model", parts: parts.length ? parts : [{ text: answer || "…" }] });
-        return this.notify(escape(answer || "Tushunmadim, qayta yozing."));
+        return this.notify(answer ? toTelegramHTML(answer) : "Tushunmadim, qayta yozing.");
       }
       return this.notify("Juda ko'p qadam bo'ldi — savolni soddalashtiring.");
     } catch (error) {
@@ -427,3 +499,20 @@ export class Vault {
 }
 
 const escape = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// Converts the AI's Markdown into the small HTML subset Telegram renders, so
+// answers arrive tidy instead of showing raw **, ### and - markers.
+function toTelegramHTML(md) {
+  if (!md) return "";
+  let s = escape(md);
+  s = s.replace(/```[a-zA-Z]*\n?([\s\S]*?)```/g, (_, c) => `<pre>${c.replace(/\n+$/, "")}</pre>`);
+  s = s.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  s = s.replace(/^\s{0,3}#{1,6}\s*(.+?)\s*$/gm, "<b>$1</b>");
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+  s = s.replace(/__([^_\n]+)__/g, "<b>$1</b>");
+  s = s.replace(/^\s*[-*•]\s+/gm, "• ");
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2">$1</a>');
+  // Leftover lone * or _ used for emphasis → italics (conservative).
+  s = s.replace(/(^|[\s(])\*([^*\n]{1,80}?)\*(?=[\s.,!?)]|$)/g, "$1<i>$2</i>");
+  return s.replace(/\n{3,}/g, "\n\n").trim();
+}

@@ -20,6 +20,8 @@ extension AppModel {
             return await searchPayload(query["q"] ?? "")
         case "/info":
             return await personInfoPayload(query["q"] ?? "")
+        case "/resolve":
+            return await resolvePayload(query["q"] ?? "")
         default:
             return nil
         }
@@ -70,18 +72,22 @@ extension AppModel {
         return ["ok": true, "chats": chats, "messages": messages]
     }
 
+    private func resolvePayload(_ q: String) async -> [String: Any] {
+        guard !q.isEmpty, let gateway else { return ["ok": false, "error": "empty query"] }
+        guard let user = await gateway.resolvePerson(q) else {
+            return ["ok": false, "found": false, "error": "could not resolve that person"]
+        }
+        let brief = await gateway.personBrief(user)
+        return ["ok": true, "found": true, "userId": user.rawValue,
+                "title": brief?.title ?? "User", "username": brief?.username ?? ""]
+    }
+
     private func personInfoPayload(_ q: String) async -> [String: Any] {
         guard !q.isEmpty, let gateway else { return ["ok": false, "error": "empty query"] }
-        // Resolve a user: numeric id, or a @username / name via global search.
-        var userID: UserID?
-        if let raw = Int64(q.filter(\.isNumber)), q.allSatisfy({ $0.isNumber }) {
-            userID = UserID(raw)
-        } else {
-            for id in await gateway.searchGlobalChats(q) where id.rawValue > 0 {
-                userID = UserID(id.rawValue); break
-            }
+        // Resolve across the user's own chats, contacts, and public usernames.
+        guard let user = await gateway.resolvePerson(q) else {
+            return ["ok": false, "error": "could not resolve that person"]
         }
-        guard let user = userID else { return ["ok": false, "error": "could not resolve that person"] }
 
         async let profileTask = gateway.personProfile(user)
         async let commonTask = gateway.groupsInCommon(user)

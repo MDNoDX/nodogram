@@ -28,5 +28,6 @@ export class AppBridge {
   async ping() { return this.get("/ping"); }
   async search(q) { return this.get("/search?q=" + encodeURIComponent(q)); }
   async info(q) { return this.get("/info?q=" + encodeURIComponent(q)); }
+  async resolve(q) { return this.get("/resolve?q=" + encodeURIComponent(q)); }
   async myInfo() { return this.get("/myinfo"); }
 }
