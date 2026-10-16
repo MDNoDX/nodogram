@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS messages_deleted ON messages (deleted_at DESC) WHERE deleted_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS messages_chat ON messages (chat_id, sent_at DESC);
+CREATE TABLE IF NOT EXISTS memory (
+  id         serial PRIMARY KEY,
+  category   text NOT NULL DEFAULT 'note',
+  content    text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS watchlist (
   person_id   bigint PRIMARY KEY,
   label       text NOT NULL DEFAULT '',
@@ -245,6 +251,19 @@ export class VaultDB {
     const r = await this.pool.query(`SELECT label FROM watchlist WHERE person_id=$1`, [personId]);
     return r.rows[0]?.label ?? null;
   }
+
+  // ── Persistent memory (survives restarts) ──────────────────────────────
+  async addMemory(category, content) {
+    const r = await this.pool.query(
+      `INSERT INTO memory (category, content) VALUES ($1,$2) RETURNING id`, [category || "note", content]);
+    return r.rows[0].id;
+  }
+  async memories(limit = 50) {
+    const r = await this.pool.query(`SELECT id, category, content, created_at FROM memory ORDER BY created_at DESC LIMIT $1`, [limit]);
+    return r.rows;
+  }
+  async deleteMemory(id) { const r = await this.pool.query(`DELETE FROM memory WHERE id=$1`, [id]); return r.rowCount > 0; }
+  async clearMemory() { const r = await this.pool.query(`DELETE FROM memory`); return r.rowCount; }
 
   async stats() {
     const r = await this.pool.query(

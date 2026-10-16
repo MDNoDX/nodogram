@@ -280,9 +280,11 @@ export class Vault {
           "<b>Qisqa komandalar:</b>\n" +
           "/analyze <i>ism</i> — odamni chuqur tahlil\n" +
           "/info <i>ism</i> — odam haqida ma'lumot\n" +
-          "/myinfo — mening faoliyatim\n" +
+          "/myinfo — mening faoliyatim · /dashboard — panel\n" +
           "/track <i>ism</i> — kuzatuvga olish · /watched · /untrack\n" +
-          "/search <i>so'z</i> · /status · /deleted · /reset");
+          "/memory — xotira · /diagnostics — holat\n" +
+          "/search <i>so'z</i> · /media · /status · /deleted · /reset\n\n" +
+          "💡 Istalgan chatда <code>@MDNoDX_bot maqsad</code> yozsangiz — tayyor javob variantlari chiqadi.");
       case "/status": {
         const s = await this.db.stats();
         const connections = await this.db.activeConnections();
@@ -305,17 +307,36 @@ export class Vault {
       case "/chats":
         return this.runAgent("List my chats you can analyse, with message counts.");
       case "/analyze":
-        return this.runAgent(`Deeply analyse my whole conversation with ${arg || "this person"} and tell me honestly what to do next. If no name was given, ask which person.`);
+        if (!arg) return this.notify("🔍 <b>Tahlil</b>\nBir odam bilan butun yozishmangizni o'qib, u haqida halol xulosa beraman.\n\nFoydalanish: <code>/analyze ism</code>\nMasalan: <code>/analyze Hasan</code> yoki <code>/analyze @username</code>\n\nYoki oddiy yozing: “Hasan bilan chatimni tahlil qil”.");
+        return this.runAgent(`Deeply analyse my whole conversation with ${arg} and tell me honestly what to do next.`);
       case "/info":
-        return this.runAgent(`Give me an honest profile of ${arg || "this person"}: look up their public info, and read my chat with them. Tell me who they are and how they are with me. If no name was given, ask who.`);
+        if (!arg) return this.notify("👤 <b>Ma'lumot</b>\nOdam haqida: ommaviy profil + siz bilan chatidagi munosabat.\n\nFoydalanish: <code>/info @username</code> · <code>/info ism</code> · <code>/info 123456789</code>");
+        return this.runAgent(`Give me an honest profile of ${arg}: look up their public info, and read my chat with them. Tell me who they are and how they are with me.`);
       case "/myinfo":
         return this.runAgent("Summarise MY own activity: how many chats, messages kept, deletions and edits caught, and my most active chats.");
       case "/track":
-        return this.runAgent(`Add ${arg || "this person"} to my watchlist so I'm alerted when they write, edit or delete in our chat. If no name was given, ask who.`);
+        if (!arg) return this.notify("👁 <b>Kuzatuv</b>\nBir odamni kuzatuvga olaman — siz bilan chatda yozsa, tahrirlasa yoki o'chirsa, kanalingizga xabar beraman.\n\nFoydalanish: <code>/track @username</code> · <code>/track ism</code>\n\nℹ️ Bot faqat sizning chatingizdagi faollikni ko'radi. Boshqa odamning yashirin harakatlarini kuzata olmayman.");
+        return this.runAgent(`Add ${arg} to my watchlist so I'm alerted when they write, edit or delete in our chat.`);
       case "/untrack":
-        return this.runAgent(`Remove ${arg || "this person"} from my watchlist.`);
+        if (!arg) return this.notify("Foydalanish: <code>/untrack ism</code> — kimni kuzatuvdan chiqarishni yozing. Ro'yxat: /watched");
+        return this.runAgent(`Remove ${arg} from my watchlist.`);
       case "/watched":
         return this.runAgent("Who is on my watchlist right now?");
+      case "/memory": {
+        const mem = await this.db.memories(50);
+        if (!mem.length) return this.notify("🧠 <b>Xotira bo'sh</b>\nMen hali siz haqingizda hech narsa saqlamadim. “Buni eslab qol: …” deb yozsangiz, saqlab qo'yaman.\n\nTozalash: <code>/memory clear</code>");
+        if (arg === "clear") { const n = await this.db.clearMemory(); return this.notify(`🧠 Xotira tozalandi (${n} ta yozuv o'chdi).`); }
+        const del = (message.text || "").match(/\/memory\s+del\s+(\d+)/);
+        if (del) { const ok = await this.db.deleteMemory(Number(del[1])); return this.notify(ok ? `🗑 #${del[1]} o'chirildi.` : "Topilmadi."); }
+        const lines = mem.map((m) => `#${m.id} ${escape(m.content)}`);
+        return this.notify("🧠 <b>Nodik eslab qolgan narsalar</b>\n\n" + lines.join("\n") + "\n\nO'chirish: <code>/memory del ID</code> · Hammasini: <code>/memory clear</code>");
+      }
+      case "/diagnostics":
+        return this.diagnostics();
+      case "/dashboard":
+        return this.dashboard();
+      case "/media":
+        return this.notify("🎬 <b>GIF va Stikerlar</b>\nGIF/sticker yuborish va tozalash <b>Nodogram ilovasida</b> (chat yozuv maydonidagi 😊 tugmasi).\n\nBotда: “oxirgi o'chirilgan rasmlarni ko'rsat” kabi so'rashingiz mumkin.");
       case "/reset":
         this.agentHistory = [];
         return this.notify("🧠 Conversation cleared.");
@@ -340,12 +361,62 @@ export class Vault {
       ["track", "Kuzatuvga olish"],
       ["watched", "Kuzatuvlar ro'yxati"],
       ["analyze", "Suhbatni chuqur tahlil qilish"],
+      ["dashboard", "Umumiy boshqaruv paneli"],
+      ["memory", "Nodik xotirasi"],
+      ["diagnostics", "Tizim va AI holatini tekshirish"],
+      ["media", "GIF va sticker haqida"],
       ["deleted", "O'chirilgan xabarlar arxivi"],
       ["status", "Bot va ulanish holati"],
       ["reset", "Suhbat kontekstini tozalash"],
     ].map(([command, description]) => ({ command, description }));
     try { await this.bot.call("setMyCommands", { commands }); this.log.info?.("[vault] command menu published"); }
     catch (error) { this.log.warn?.("[vault] setMyCommands failed:", error.message); }
+  }
+
+  /// Technical health — no secrets, keys shown only as count.
+  async diagnostics() {
+    const lines = ["🩺 <b>Tizim diagnostikasi</b>", ""];
+    // AI
+    lines.push(`<b>AI (Nodik)</b>: ${this.ai ? "yoqilgan ✅" : "o'chirilgan ❌"}`);
+    if (this.ai) {
+      lines.push(`• Kalitlar: ${this.ai.keys.length} ta sozlangan`);
+      lines.push(`• Modellar: ${this.ai.models.join(" → ")}`);
+      let aiState = "tekshirilmadi";
+      try { await this.ai.generate({ system: "ping", prompt: "ok", temperature: 0 }); aiState = "ishlayapti ✅"; }
+      catch (e) { aiState = e instanceof QuotaExceeded ? `kunlik limit tugadi (⏳ ${escape(e.retryAfter)})` : "xato: " + escape((e.message||"").slice(0,60)); }
+      lines.push(`• Holat: ${aiState}`);
+    }
+    // Telegram
+    const connections = await this.db.activeConnections().catch(() => []);
+    lines.push("", `<b>Telegram</b>: bot ulanган ✅`);
+    lines.push(`• Business ulanish: ${connections.length ? "faol ✅" : "yo'q ⚠️ (Chat automation sozlang)"}`);
+    // App bridge
+    const ping = await this.app.ping();
+    lines.push("", `<b>Nodogram ilovasi</b>: ${ping && ping.ok ? (ping.signedIn ? "ochiq, login qilingan ✅" : "ochiq, login yo'q ⚠️") : "yopiq ❌ (/info, /search, /myinfo uchun oching)"}`);
+    // DB
+    let db = "ulanган ✅";
+    try { await this.db.stats(); } catch { db = "xato ❌"; }
+    lines.push("", `<b>Ma'lumotlar bazasi</b>: ${db}`);
+    return this.notify(lines.join("\n"));
+  }
+
+  /// A compact overview the owner can glance at.
+  async dashboard() {
+    const s = await this.db.stats().catch(() => ({ total: 0, chats: 0, deleted: 0, edited: 0 }));
+    const watched = await this.db.watched().catch(() => []);
+    const mem = await this.db.memories(1000).catch(() => []);
+    const connections = await this.db.activeConnections().catch(() => []);
+    const lines = [
+      "📊 <b>Nodik — Boshqaruv paneli</b>", "",
+      `💬 Chatlar: <b>${s.chats}</b> · Saqlangan xabar: <b>${s.total}</b>`,
+      `🗑 Ushlangan o'chirish: <b>${s.deleted}</b> · ✏️ Tahrir: <b>${s.edited}</b>`,
+      `👁 Kuzatuvda: <b>${watched.length}</b> kishi` + (watched.length ? " (" + watched.slice(0,5).map((w)=>escape(w.label)).join(", ") + ")" : ""),
+      `🧠 Xotira: <b>${mem.length}</b> ta yozuv`,
+      `🤖 AI: ${this.ai ? "yoqilgan" : "o'chirilgan"} · Ulanish: ${connections.length ? "faol" : "yo'q"}`,
+      "",
+      "Tezkor: /diagnostics · /myinfo · /watched · /memory · /deleted",
+    ];
+    return this.notify(lines.join("\n"));
   }
 
   // ── Conversational agent ────────────────────────────────────────────────
@@ -363,6 +434,7 @@ export class Vault {
       { name: "watch_person", description: "Add someone to the watchlist so the user is alerted (in their log channel) when that person writes to, edits or deletes in THEIR chat with the user. Name is a stored chat name or @username.", parameters: { type: "OBJECT", properties: { name: { type: "STRING" } }, required: ["name"] } },
       { name: "unwatch_person", description: "Stop watching someone.", parameters: { type: "OBJECT", properties: { name: { type: "STRING" } }, required: ["name"] } },
       { name: "list_watched", description: "People currently on the watchlist.", parameters: { type: "OBJECT", properties: {} } },
+      { name: "remember", description: "Save a lasting fact about the user, their projects, preferences or decisions, so it is remembered across restarts. Only save real, confirmed facts — not guesses.", parameters: { type: "OBJECT", properties: { content: { type: "STRING" }, category: { type: "STRING" } }, required: ["content"] } },
       { name: "person_info", description: "Rich profile of a person from the user's logged-in Nodogram session: their public profile, the groups the user shares with them, their recent messages in those shared groups, and username history. Use a @username, name or numeric id. Needs the Nodogram app to be open.", parameters: { type: "OBJECT", properties: { who: { type: "STRING" } }, required: ["who"] } },
       { name: "my_info", description: "The user's own account picture from Nodogram: their groups, channels, groups they own, groups they left, and usernames. Needs the Nodogram app to be open.", parameters: { type: "OBJECT", properties: {} } },
       { name: "global_search", description: "Search Telegram beyond the user's private chats — public channels, groups, people by name, and messages — via the user's Nodogram session. Needs the Nodogram app to be open. (A bot alone cannot index all of Telegram.)", parameters: { type: "OBJECT", properties: { query: { type: "STRING" } }, required: ["query"] } },
@@ -438,6 +510,11 @@ export class Vault {
         await this.bot.call("sendMessage", { business_connection_id: connections[0].id, chat_id: Number(chat.chat_id), text: args.text });
         return { sent: true, to: chat.chat_title };
       }
+      if (name === "remember") {
+        if (!args.content || !args.content.trim()) return { error: "nothing to remember" };
+        const id = await this.db.addMemory(args.category || "note", args.content.trim());
+        return { saved: true, id };
+      }
       if (name === "person_info") return await this.app.info(args.who || "");
       if (name === "my_info") return await this.app.myInfo();
       if (name === "global_search") return await this.app.search(args.query || "");
@@ -451,7 +528,7 @@ export class Vault {
     if (!this.ai) return this.notify("AI is off. Add a Gemini key in Nodogram → Settings → AI Assistant.");
     if (!text.trim()) return this.notify("Menga oddiy tilda yozing — chatlaringizni tahlil qilaman, odamni o'rganaman, javob yozaman yoki yuboraman.");
     await this.bot.call("sendChatAction", { chat_id: this.config.ownerId, action: "typing" }).catch(() => {});
-    const system = [
+let system = [
       "Sening isming Nodik — foydalanuvchining shaxsiy aqlli yordamchisi. Egang — Nodirbek. U bilan har doim O'ZBEK TILIDA (lotin), tabiiy va samimiy gaplash.",
       "Doim o'zbekcha javob ber. Faqat foydalanuvchining o'zi boshqa tilni so'rasa yoki yozsa, o'sha tilda javob ber. Komanda shart emas — oddiy suhbat kifoya.",
       "Sen xushomadchi emas, halol va o'tkir tahlilchisan: odamlarni ularning haqiqiy xabarlari asosida baholaysan, ko'pchilik sezmaydigan naqshlarni ko'rsatasan, va aniq, rost xulosa hamda eng yaxshi keyingi qadamni aytasan — quruq ko'ngilxushlik emas.",
@@ -461,7 +538,12 @@ export class Vault {
       "Everything you surface is what Telegram already shows the user from their own account — their chats, their groups, and the public side of people they share groups with. You never fabricate a person's whereabouts or activity you cannot actually see.",
       "send_message'dan oldin: foydalanuvchi aynan o'sha matnni aynan o'sha odamga yuborishni so'raganiga amin bo'l; shubha bo'lsa, avval qoralamani ko'rsatib so'ra.",
       "MUHIM: javoblaringni toza yoz. Markdown ishlatsang oddiy ishlat (**qalin**, - ro'yxat). Javob o'zbekcha, qisqa va aniq bo'lsin.",
+      "Agar foydalanuvchi haqida muhim, tasdiqlangan fakt bilsang (afzallik, loyiha, qaror), uni remember bilan saqla — faqat haqiqiy faktlarni, taxminni emas.",
     ].join(" ");
+    try {
+      const mem = await this.db.memories(25);
+      if (mem.length) system += "\n\nNodik eslab qolgan faktlar (foydalanuvchi haqida):\n" + mem.map((m) => `- ${m.content}`).join("\n");
+    } catch {}
     this.agentHistory.push({ role: "user", parts: [{ text }] });
     if (this.agentHistory.length > 24) this.agentHistory = this.agentHistory.slice(-24);
     try {
