@@ -252,6 +252,24 @@ export class VaultDB {
     return r.rows[0]?.label ?? null;
   }
 
+  /// The most recently active private chat where the OTHER person wrote last
+  /// (i.e. someone is likely waiting for the user's reply). Returns the chat
+  /// and its recent messages for suggesting a reply.
+  async latestConversation() {
+    const r = await this.pool.query(
+      `SELECT chat_id, MAX(chat_title) AS chat_title, MAX(sent_at) AS last_at,
+              bool_or(NOT is_outgoing AND sent_at = (SELECT MAX(sent_at) FROM messages m2 WHERE m2.chat_id = m.chat_id)) AS waiting
+       FROM messages m
+       WHERE chat_id > 0 AND text <> ''
+       GROUP BY chat_id
+       ORDER BY MAX(sent_at) DESC
+       LIMIT 1`);
+    const top = r.rows[0];
+    if (!top) return null;
+    const msgs = await this.chatMessages(top.chat_id, 40);
+    return { chatId: top.chat_id, title: top.chat_title, waiting: top.waiting, messages: msgs };
+  }
+
   // ── Persistent memory (survives restarts) ──────────────────────────────
   async addMemory(category, content) {
     const r = await this.pool.query(

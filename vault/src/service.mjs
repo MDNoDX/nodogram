@@ -76,35 +76,52 @@ export class Vault {
       return this.bot.call("answerInlineQuery", { inline_query_id: iq.id, results: [], cache_time: 5, is_personal: true }).catch(() => {});
     }
     const q = (iq.query || "").trim();
-    if (!this.ai || q.length < 3) {
-      return this.bot.call("answerInlineQuery", {
-        inline_query_id: iq.id, cache_time: 5, is_personal: true,
-        results: [{ type: "article", id: "hint", title: "Nodik — javob variantlari",
-          description: "Yozing: nimaga javob kerakligini yoki maqsadingizni. Masalan: 'rad et', 'rahmat ayt', 'uchrashuvga chaqir'",
-          input_message_content: { message_text: q || "" } }],
-      }).catch(() => {});
+    if (!this.ai) {
+      return this.bot.call("answerInlineQuery", { inline_query_id: iq.id, cache_time: 10, is_personal: true,
+        results: [{ type: "article", id: "off", title: "Nodik AI o'chirilgan",
+          description: "Gemini kaliti sozlanmagan", input_message_content: { message_text: q } }] }).catch(() => {});
     }
-    // Quota guard: cache by query, and don't call the model more than once/2s.
-    this._inlineCache = this._inlineCache || new Map();
-    const cached = this._inlineCache.get(q);
-    if (cached && Date.now() - cached.at < 600_000) return this.answerInline(iq.id, cached.variants);
+    // Debounce: while the user is still typing, don't spend a model call.
     const now = Date.now();
-    if (this._lastInlineAt && now - this._lastInlineAt < 2000) {
-      // Too soon (still typing) — offer the raw text so nothing blocks, no AI call.
-      return this.bot.call("answerInlineQuery", { inline_query_id: iq.id, cache_time: 2, is_personal: true,
-        results: [{ type: "article", id: "raw", title: "Yuborish: " + q.slice(0, 40), description: "Nodik variantlari uchun yozishni tugating…",
-          input_message_content: { message_text: q } }] }).catch(() => {});
+    this._inlineCache = this._inlineCache || new Map();
+    if (this._lastInlineAt && now - this._lastInlineAt < 1800 && !this._inlineCache.has(q || "__auto__")) {
+      return this.bot.call("answerInlineQuery", { inline_query_id: iq.id, cache_time: 1, is_personal: true,
+        results: [{ type: "article", id: "wait", title: q ? ("Yuborish: " + q.slice(0, 40)) : "Nodik tayyorlamoqda…",
+          description: "Bir lahza…", input_message_content: { message_text: q } }] }).catch(() => {});
     }
     this._lastInlineAt = now;
     try {
-      const out = await this.ai.generate({
-        system: "Foydalanuvchi Telegramda inline rejimda yordam so'rayapti. Uning so'rovi/maqsadi asosida YUBORISHGA TAYYOR 3 ta qisqa javob variantini yoz. Har biri bitta qatorda, alohida, raqamsiz. O'zbekcha, tabiiy, hozirgi ohangga mos. Faqat variantlarni ber, boshqa hech narsa yozma.",
-        prompt: q,
-        temperature: 0.9,
-      });
-      const variants = out.split(/\n+/).map((l) => l.replace(/^\s*[-*\d.)\]]+\s*/, "").trim()).filter((l) => l.length > 0).slice(0, 5);
-      if (variants.length) this._inlineCache.set(q, { at: Date.now(), variants });
-      return this.answerInline(iq.id, variants.length ? variants : [q]);
+      // Empty/short query → analyse the latest conversation and suggest replies.
+      // Query with text → treat it as the user's goal for that reply.
+      const convo = await this.db.latestConversation();
+      const cacheKey = (q || "__auto__") + "|" + (convo ? convo.messages.length : 0);
+      const cached = this._inlineCache.get(cacheKey);
+      if (cached && now - cached.at < 300_000) return this.answerInline(iq.id, cached.variants, cached.who);
+
+      let variants, who = "";
+      if (convo && convo.messages.length) {
+        who = convo.title;
+        const transcript = convo.messages.map((m) => `${m.is_outgoing ? "Men" : who}: ${(m.text || "").slice(0, 300)}`).join("\n");
+        const goal = q ? `\n\nMening maqsadim: ${q}` : "";
+        const out = await this.ai.generate({
+          system: "Sen foydalanuvchining yozishma yordamchisisan. Quyidagi haqiqiy suhbatni o'qib, foydalanuvchi (Men) endi yuborishi uchun 3 ta QISQA, tabiiy javob variantini yoz. Har biri alohida qatorda, raqamsiz, o'zbekcha (yoki suhbat tilida), hozirgi ohangga mos. Faqat yuborishga tayyor matnlarni ber — kirish so'zi, sarlavha yoki izoh yozma.",
+          prompt: `Suhbat (${who} bilan):\n${transcript}${goal}`,
+          temperature: 0.9,
+        });
+        variants = splitVariants(out);
+      } else if (q) {
+        const out = await this.ai.generate({
+          system: "Foydalanuvchining maqsadi asosida yuborishga tayyor 3 ta qisqa javob variantini yoz. Har biri alohida qatorda, o'zbekcha, tabiiy. Faqat matnlarni ber — kirish so'zi yozma.",
+          prompt: q, temperature: 0.9,
+        });
+        variants = splitVariants(out);
+      } else {
+        return this.bot.call("answerInlineQuery", { inline_query_id: iq.id, cache_time: 10, is_personal: true,
+          results: [{ type: "article", id: "empty", title: "Hali yozishma yo'q", description: "Maqsad yozing: 'rahmat ayt', 'rad et'…",
+            input_message_content: { message_text: q } }] }).catch(() => {});
+      }
+      if (variants && variants.length) this._inlineCache.set(cacheKey, { at: Date.now(), variants, who });
+      return this.answerInline(iq.id, (variants && variants.length) ? variants : [q || "..."], who);
     } catch (error) {
       return this.bot.call("answerInlineQuery", { inline_query_id: iq.id, cache_time: 5, is_personal: true,
         results: [{ type: "article", id: "err", title: "AI hozir javob berolmadi",
@@ -113,11 +130,12 @@ export class Vault {
     }
   }
 
-  async answerInline(id, variants) {
+  async answerInline(id, variants, who = "") {
+    const tag = who ? `${who}ga javob` : "Yuborish uchun bosing";
     const results = variants.slice(0, 5).map((text, i) => ({
       type: "article", id: "v" + i,
-      title: text.slice(0, 60),
-      description: "Yuborish uchun bosing",
+      title: text.slice(0, 70),
+      description: tag,
       input_message_content: { message_text: text },
     }));
     return this.bot.call("answerInlineQuery", { inline_query_id: id, results, cache_time: 10, is_personal: true }).catch(() => {});
@@ -581,6 +599,15 @@ let system = [
 }
 
 const escape = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// Turns the model's lines into clean send-ready reply options: strips bullets/
+// numbering and quotes, and drops preamble/heading lines (e.g. "Mana 3 ta:").
+function splitVariants(out) {
+  return String(out || "").split(/\n+/)
+    .map((l) => l.replace(/^\s*[-*\d.)\]]+\s*/, "").replace(/^["'“‘]|["'”’]$/g, "").trim())
+    .filter((l) => l.length > 1 && !/[:：]\s*$/.test(l) && !/^(mana|quyida|variant|javob variant)/i.test(l))
+    .slice(0, 5);
+}
 
 // Converts the AI's Markdown into the small HTML subset Telegram renders, so
 // answers arrive tidy instead of showing raw **, ### and - markers.
