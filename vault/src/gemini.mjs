@@ -8,6 +8,7 @@
 // error the bot can explain, instead of a vague "unavailable".
 
 const MODELS = ["gemini-flash-lite-latest", "gemini-flash-latest"];
+const IMAGE_MODELS = ["gemini-2.5-flash-image", "gemini-3.1-flash-image"];
 
 export class QuotaExceeded extends Error {
   constructor(retryAfter) { super("quota"); this.name = "QuotaExceeded"; this.retryAfter = retryAfter; }
@@ -41,6 +42,46 @@ export class Gemini {
       tools: tools ? [{ functionDeclarations: tools }] : undefined,
       generationConfig: { temperature: 0.7 },
     });
+  }
+
+  /// Generates an image from a text prompt. Returns { mime, data (base64) }.
+  /// Rotates keys/models on 429 like request(); throws QuotaExceeded if all
+  /// keys are out of image quota.
+  async image(prompt) {
+    if (!this.hasKey) throw new Error("no API key");
+    const body = {
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { responseModalities: ["IMAGE"] },
+    };
+    let quotaRetry = null, lastError = null;
+    const n = this.keys.length;
+    for (let ki = 0; ki < n; ki++) {
+      const key = this.keys[(this.keyIndex + ki) % n];
+      for (const model of IMAGE_MODELS) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 90_000);
+        try {
+          const res = await fetch(`${this.base}/models/${model}:generateContent`, {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-goog-api-key": key },
+            body: JSON.stringify(body), signal: controller.signal,
+          });
+          const json = await res.json().catch(() => ({}));
+          if (res.status === 429) { quotaRetry = quotaRetry ?? retryFrom(json); break; }
+          if (res.status === 404) { lastError = new Error("image model unavailable"); continue; }
+          if (!res.ok) { lastError = new Error(json?.error?.message || `Gemini ${res.status}`); continue; }
+          const parts = json?.candidates?.[0]?.content?.parts ?? [];
+          const img = parts.find((p) => p.inlineData);
+          if (img) { this.keyIndex = (this.keyIndex + ki) % n; return { mime: img.inlineData.mimeType || "image/png", data: img.inlineData.data }; }
+          lastError = new Error(parts.find((p) => p.text)?.text?.slice(0, 120) || "no image returned");
+        } catch (error) {
+          lastError = error;
+        } finally { clearTimeout(timer); }
+      }
+      if (quotaRetry) continue;   // this key capped → next key
+    }
+    if (quotaRetry !== null) throw new QuotaExceeded(quotaRetry);
+    throw lastError || new Error("image generation failed");
   }
 
   /// Tries each (key × model) combination. 503 is a brief blip → one short

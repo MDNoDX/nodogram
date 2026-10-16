@@ -301,6 +301,7 @@ export class Vault {
           "/myinfo — mening faoliyatim · /dashboard — panel\n" +
           "/track <i>ism</i> — kuzatuvga olish · /watched · /untrack\n" +
           "/memory — xotira · /diagnostics — holat\n" +
+          "/image <i>tavsif</i> — rasm yaratish\n" +
           "/search <i>so'z</i> · /media · /status · /deleted · /reset\n\n" +
           "💡 Istalgan chatда <code>@MDNoDX_bot maqsad</code> yozsangiz — tayyor javob variantlari chiqadi.");
       case "/status": {
@@ -353,6 +354,19 @@ export class Vault {
         return this.diagnostics();
       case "/dashboard":
         return this.dashboard();
+      case "/image": {
+        const prompt = (message.text || "").slice("/image".length).trim();
+        if (!prompt) return this.notify("🎨 <b>Rasm yaratish</b>\nFoydalanish: <code>/image tavsif</code>\nMasalan: <code>/image tog' cho'qqisida quyosh chiqishi, akvarel uslubida</code>\n\nYoki oddiy yozing: “tog' rasmini yarat”.");
+        if (!this.ai) return this.notify("AI o'chirilgan.");
+        await this.bot.call("sendChatAction", { chat_id: this.config.ownerId, action: "upload_photo" }).catch(() => {});
+        try {
+          const img = await this.ai.image(prompt);
+          await this.bot.sendPhotoBuffer(this.config.ownerId, Buffer.from(img.data, "base64"), { caption: "🎨 " + escape(prompt.slice(0, 200)), mime: img.mime });
+        } catch (e) {
+          return this.notify(e instanceof QuotaExceeded ? `⏳ Rasm kvotasi barcha kalitlarda tugadi. ${escape(e.retryAfter)} dan keyin urinib ko'ring.` : "Rasm yaratilmadi: " + escape((e.message || "").slice(0, 120)));
+        }
+        return;
+      }
       case "/media":
         return this.notify("🎬 <b>GIF va Stikerlar</b>\nGIF/sticker yuborish va tozalash <b>Nodogram ilovasida</b> (chat yozuv maydonidagi 😊 tugmasi).\n\nBotда: “oxirgi o'chirilgan rasmlarni ko'rsat” kabi so'rashingiz mumkin.");
       case "/reset":
@@ -382,6 +396,7 @@ export class Vault {
       ["dashboard", "Umumiy boshqaruv paneli"],
       ["memory", "Nodik xotirasi"],
       ["diagnostics", "Tizim va AI holatini tekshirish"],
+      ["image", "Rasm yaratish (AI)"],
       ["media", "GIF va sticker haqida"],
       ["deleted", "O'chirilgan xabarlar arxivi"],
       ["status", "Bot va ulanish holati"],
@@ -453,6 +468,7 @@ export class Vault {
       { name: "unwatch_person", description: "Stop watching someone.", parameters: { type: "OBJECT", properties: { name: { type: "STRING" } }, required: ["name"] } },
       { name: "list_watched", description: "People currently on the watchlist.", parameters: { type: "OBJECT", properties: {} } },
       { name: "remember", description: "Save a lasting fact about the user, their projects, preferences or decisions, so it is remembered across restarts. Only save real, confirmed facts — not guesses.", parameters: { type: "OBJECT", properties: { content: { type: "STRING" }, category: { type: "STRING" } }, required: ["content"] } },
+      { name: "generate_image", description: "Generate an original image from a text description and send it to the user. Use when the user asks to create/draw/make a picture ('rasm yarat', 'rasm chiz'). Describe the scene in detail in the prompt.", parameters: { type: "OBJECT", properties: { prompt: { type: "STRING" } }, required: ["prompt"] } },
       { name: "person_info", description: "Rich profile of a person from the user's logged-in Nodogram session: their public profile, the groups the user shares with them, their recent messages in those shared groups, and username history. Use a @username, name or numeric id. Needs the Nodogram app to be open.", parameters: { type: "OBJECT", properties: { who: { type: "STRING" } }, required: ["who"] } },
       { name: "my_info", description: "The user's own account picture from Nodogram: their groups, channels, groups they own, groups they left, and usernames. Needs the Nodogram app to be open.", parameters: { type: "OBJECT", properties: {} } },
       { name: "global_search", description: "Search Telegram beyond the user's private chats — public channels, groups, people by name, and messages — via the user's Nodogram session. Needs the Nodogram app to be open. (A bot alone cannot index all of Telegram.)", parameters: { type: "OBJECT", properties: { query: { type: "STRING" } }, required: ["query"] } },
@@ -527,6 +543,18 @@ export class Vault {
         if (!chat) return { error: "no such chat to send to" };
         await this.bot.call("sendMessage", { business_connection_id: connections[0].id, chat_id: Number(chat.chat_id), text: args.text });
         return { sent: true, to: chat.chat_title };
+      }
+      if (name === "generate_image") {
+        if (!args.prompt || !args.prompt.trim()) return { error: "describe what to draw" };
+        try {
+          const img = await this.ai.image(args.prompt.trim());
+          const buffer = Buffer.from(img.data, "base64");
+          await this.bot.sendPhotoBuffer(this.config.ownerId, buffer, { caption: "🎨 " + escape(args.prompt.slice(0, 200)), mime: img.mime });
+          return { sent: true, note: "Image delivered to the user." };
+        } catch (e) {
+          if (e instanceof QuotaExceeded) return { error: "image quota exhausted for all keys; try again in " + e.retryAfter };
+          return { error: "image generation failed: " + (e.message || "").slice(0, 100) };
+        }
       }
       if (name === "remember") {
         if (!args.content || !args.content.trim()) return { error: "nothing to remember" };

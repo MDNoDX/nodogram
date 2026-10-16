@@ -50,6 +50,19 @@ export class BotAPI {
     return body.result;
   }
 
+  /** Sends a photo from an in-memory buffer (e.g. a generated image). */
+  async sendPhotoBuffer(chatId, buffer, { caption = "", mime = "image/png" } = {}) {
+    const form = new FormData();
+    form.append("chat_id", String(chatId));
+    if (caption) { form.append("caption", caption.slice(0, 1024)); form.append("parse_mode", "HTML"); }
+    const ext = mime.includes("jpeg") ? "jpg" : (mime.includes("webp") ? "webp" : "png");
+    form.append("photo", new Blob([buffer], { type: mime }), `nodik.${ext}`);
+    const res = await fetch(`${this.base}/sendPhoto`, { method: "POST", body: form });
+    const body = await res.json();
+    if (!body.ok) throw new BotError("sendPhoto", body.error_code, body.description);
+    return body.result;
+  }
+
   /** Downloads a file the bot can see (Bot API limit: 20 MB). */
   async download(fileId, destination) {
     const file = await this.call("getFile", { file_id: fileId });
