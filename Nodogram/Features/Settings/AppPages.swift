@@ -15,9 +15,25 @@ struct GeneralPage: View {
     @AppStorage("media.autoplayGIFs") private var autoplayGIFs = true
     @AppStorage("media.autoDownloadPhotos") private var autoDownloadPhotos = true
     @AppStorage("links.askBeforeOpening") private var askBeforeOpening = true
+    @AppStorage("general.keepRunningInBackground") private var keepRunning = true
+    @State private var launchAtLogin = LoginItem.isEnabled
+    @State private var loginNeedsApproval = LoginItem.needsApproval
 
     var body: some View {
         SettingsForm {
+            Section {
+                Toggle("Start Nodogram at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, on in
+                        try? LoginItem.set(on)
+                        loginNeedsApproval = LoginItem.needsApproval
+                    }
+                Toggle("Keep running in the menu bar when the window is closed", isOn: $keepRunning)
+                if loginNeedsApproval {
+                    Button("Approve in System Settings…") { LoginItem.openSystemSettings() }
+                }
+            } header: { Text("Background") } footer: {
+                SettingsNote("Keep these on so Nodogram runs quietly after you log in and keeps receiving updates — this lets the Nodik bot answer about your groups, people and searches even when you don't have the window open. You never have to keep it open manually.")
+            }
             Section("Input") {
                 Picker("Send messages with", selection: $sendWithEnter) {
                     Text("↩ Return  (⇧↩ for a new line)").tag(true)

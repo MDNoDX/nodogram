@@ -8,6 +8,7 @@ import SwiftUI
 import AppKit
 import NodogramFeatures
 import NodogramUI
+import NodogramPlatform
 
 @main
 struct NodogramMain: App {
@@ -117,6 +118,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { WindowOpener.shared.ensureWindow() }
         // Serve live data to the Vault bot (loopback, token-authenticated).
         AppControlServer.shared.start(model: AppModel.shared)
+        // So the bot has live data without the user keeping Nodogram open:
+        // start at login (once; the user can turn it off in Settings). The app
+        // already keeps running in the menu bar when the window is closed.
+        if UserDefaults.standard.object(forKey: "autostart.configured") == nil {
+            try? LoginItem.set(true)
+            UserDefaults.standard.set(true, forKey: "autostart.configured")
+        }
     }
 
 }
