@@ -116,6 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Ensure a window is visible shortly after launch (retries, since the
         // opener action is captured once the menu bar label renders).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { WindowOpener.shared.ensureWindow() }
+        // Start TDLib now, not when a window appears, so the app receives
+        // updates and serves the bot even while running window-less.
+        Task { @MainActor in await AppModel.shared.startIfNeeded() }
         // Serve live data to the Vault bot (loopback, token-authenticated).
         AppControlServer.shared.start(model: AppModel.shared)
         // So the bot has live data without the user keeping Nodogram open:

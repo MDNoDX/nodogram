@@ -292,6 +292,19 @@ public final class AppModel {
 
     // MARK: - Startup
 
+    private var startInProgress = false
+
+    /// Starts TDLib once, regardless of whether a window is open — called from
+    /// the app lifecycle so the Nodik bot has live data even when Nodogram is
+    /// running window-less in the menu bar. Repeated calls are no-ops while a
+    /// start is in progress or the gateway is already up.
+    public func startIfNeeded() async {
+        if startInProgress || gateway != nil { return }
+        startInProgress = true
+        await start()
+        startInProgress = false
+    }
+
     /// Loads credentials and, if present, starts TDLib. Safe to call again from
     /// the setup screen's "Check Again" button.
     public func start() async {

@@ -33,7 +33,7 @@ public struct MainWindowView: View {
 
             case .needsCredentials(let detail):
                 SetupView(detail: detail) {
-                    Task { await model.start() }
+                    Task { await model.startIfNeeded() }
                 }
 
             case .storageLocked(let detail):
@@ -129,7 +129,7 @@ public struct MainWindowView: View {
         .preferredColorScheme(colorScheme == "light" ? .light : colorScheme == "dark" ? .dark : nil)
         .task {
             if case .loadingCredentials = model.phase {
-                await model.start()
+                await model.startIfNeeded()
             }
         }
         .onAppear {
