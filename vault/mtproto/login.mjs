@@ -43,12 +43,23 @@ await client.start({
 });
 
 const session = client.session.save();
-console.log("\n=================  SESSION STRING (keep secret)  =================\n");
-console.log(session);
-console.log("\n==================================================================");
-console.log("Add this line to the .env file next to the watcher:\n");
-console.log("MTPROTO_SESSION=" + session);
-console.log("\nThen run the watcher:  node watcher.mjs   (or set up the service — see README.md)");
+
+// Save it straight into .env so there is nothing to copy by hand.
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+const envPath = path.join(path.dirname(fileURLToPath(import.meta.url)), ".env");
+try {
+  let text = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : "";
+  if (/^MTPROTO_SESSION=.*$/m.test(text)) text = text.replace(/^MTPROTO_SESSION=.*$/m, "MTPROTO_SESSION=" + session);
+  else text += (text.endsWith("\n") || text === "" ? "" : "\n") + "MTPROTO_SESSION=" + session + "\n";
+  fs.writeFileSync(envPath, text, { mode: 0o600 });
+  console.log("\n✅ Muvaffaqiyatli! Session .env ichiga saqlandi (maxfiy).");
+  console.log("   Endi ishga tushiring:  node watcher.mjs");
+} catch (e) {
+  console.log("\n✅ Login bo'ldi, lekin .env'ga yozib bo'lmadi:", e.message);
+  console.log("   Quyidagi qatorni .env'ga qo'lda qo'shing:\n   MTPROTO_SESSION=" + session);
+}
 await client.disconnect();
 await rl.close();
 process.exit(0);
