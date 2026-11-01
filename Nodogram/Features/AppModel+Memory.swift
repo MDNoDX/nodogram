@@ -14,8 +14,22 @@ extension AppModel {
         VaultClient.fromEnvironment()?.logChannel.map(ChatID.init)
     }
 
+    /// When true (the default), the standalone Nodik watcher (MTProto, runs
+    /// non-stop and independent of this Mac) is the single source in the log
+    /// channel for typing, story views, mentions and contact-adds — in Uzbek.
+    /// The app then skips posting those itself, so each event arrives once, not
+    /// twice. The app still keeps them locally (Deleted list, Story Viewers,
+    /// system notifications). Turn the app back on as the source with:
+    ///   defaults write com.example.nodogram watcherOwnsChannel -bool false
+    static var watcherOwnsChannel: Bool {
+        (UserDefaults.standard.object(forKey: "watcherOwnsChannel") as? Bool) ?? true
+    }
+
     /// Posts one memory line to the channel (deduplicated for a few minutes).
-    func archiveToChannel(_ text: String, dedupe: String? = nil) {
+    /// `overlapsWatcher` marks events the Nodik watcher also reports; those are
+    /// skipped while `watcherOwnsChannel` is on, to avoid duplicate messages.
+    func archiveToChannel(_ text: String, dedupe: String? = nil, overlapsWatcher: Bool = false) {
+        if overlapsWatcher && Self.watcherOwnsChannel { return }
         guard let channel = logChannelID, let gateway else { return }
         if let dedupe {
             let now = Date()
@@ -36,7 +50,7 @@ extension AppModel {
         // They added you back (you already had them): now a mutual contact.
         if nowMutual && !wasMutual {
             notifyMemory("➕ \(name) added you to their contacts", "You are now mutual contacts.", user: user)
-            archiveToChannel("➕ <b>\(Self.htmlEscape(name))</b> added you to their contacts — now mutual · \(Self.stamp())")
+            archiveToChannel("➕ <b>\(Self.htmlEscape(name))</b> added you to their contacts — now mutual · \(Self.stamp())", overlapsWatcher: true)
         } else if wasMutual && !nowMutual && isContact {
             // You still have them, but they are no longer mutual: they removed you.
             notifyMemory("➖ \(name) removed you from their contacts", "You still have them saved.", user: user)

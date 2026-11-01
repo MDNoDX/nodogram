@@ -26,6 +26,13 @@ const botToken = env.BOT_TOKEN;
 const channel = env.LOG_CHANNEL;
 const reportMessages = env.REPORT_MESSAGES === "1" || env.REPORT_MESSAGES === "true";
 const debug = env.DEBUG === "1" || env.DEBUG === "true";
+// Delete/edit are OFF by default: on this Mac the Vault (Business API) already
+// reports private deletions/edits — and far better, re-sending deleted MEDIA —
+// so the watcher reporting them too would duplicate, and group/channel edits
+// (typo fixes, hashtag tweaks) are pure noise. On a VPS with no Vault, set
+// WATCH_DELETES=1 / WATCH_EDITS=1; the watcher then reports PRIVATE ones only.
+const watchDeletes = env.WATCH_DELETES === "1" || env.WATCH_DELETES === "true";
+const watchEdits = env.WATCH_EDITS === "1" || env.WATCH_EDITS === "true";
 
 if (!apiId || !apiHash || !session) {
   console.error("Missing API_ID / API_HASH / MTPROTO_SESSION in .env — run `node login.mjs` first.");
@@ -151,7 +158,8 @@ async function handleMessage(m) {
   const chanId = isChannel ? Number(m.peerId.channelId) : null;
   const key = storeKey(isChannel, chanId, m.id);
   const fromId = m.fromId?.userId ? Number(m.fromId.userId) : (m.peerId.userId ? Number(m.peerId.userId) : null);
-  remember(key, { text: m.message || "", fromId, title: titleCache.get(peerKey(m.peerId)) });
+  const priv = m.peerId instanceof Api.PeerUser;
+  remember(key, { text: m.message || "", fromId, title: titleCache.get(peerKey(m.peerId)), priv });
 
   if (!m.out && isGroupish && mentionsMe(m)) {
     const title = await chatTitle(m.peerId);
@@ -164,6 +172,7 @@ async function onDelete(key) {
   const rec = msgStore.get(key);
   if (!rec) return;   // we never saw it (sent before the watcher started)
   msgStore.delete(key);
+  if (!watchDeletes || !rec.priv) return;   // private only; Vault owns these, groups are noise
   if (!rec.text) return;
   const who = rec.fromId ? await displayName(rec.fromId) : "Kimdir";
   const where = rec.title ? ` (<b>${escape(rec.title)}</b>)` : "";
@@ -176,7 +185,9 @@ async function onEdit(m, isChannel) {
   const key = storeKey(isChannel, chanId, m.id);
   const prev = msgStore.get(key);
   const now = m.message || "";
-  remember(key, { text: now, fromId: prev?.fromId ?? (m.fromId?.userId ? Number(m.fromId.userId) : null), title: prev?.title });
+  const priv = m.peerId instanceof Api.PeerUser;
+  remember(key, { text: now, fromId: prev?.fromId ?? (m.fromId?.userId ? Number(m.fromId.userId) : null), title: prev?.title, priv });
+  if (!watchEdits || !priv) return;   // private only; Vault owns these, group edits are noise
   if (!prev || prev.text === now || !prev.text) return;
   const fromId = prev.fromId;
   const who = fromId ? await displayName(fromId) : "Kimdir";
@@ -225,7 +236,7 @@ client.addEventHandler(async (update) => {
     // Short forms (private / basic-group incoming) — capture + typing cancel.
     if (update instanceof Api.UpdateShortMessage && !update.out) {
       const uid = Number(update.userId);
-      remember(storeKey(false, null, update.id), { text: update.message || "", fromId: uid, title: null });
+      remember(storeKey(false, null, update.id), { text: update.message || "", fromId: uid, title: null, priv: true });
       const secs = cancelTyping(uid);
       maybeNewMutual(uid);
       if (reportMessages) {
@@ -235,7 +246,7 @@ client.addEventHandler(async (update) => {
       return;
     }
     if (update instanceof Api.UpdateShortChatMessage && !update.out) {
-      remember(storeKey(false, null, update.id), { text: update.message || "", fromId: Number(update.fromId), title: null });
+      remember(storeKey(false, null, update.id), { text: update.message || "", fromId: Number(update.fromId), title: null, priv: false });
       return;
     }
 
@@ -300,8 +311,9 @@ try {
   for (const u of contacts?.users || []) if (u.mutualContact) knownMutuals.add(Number(u.id));
 } catch { /* best effort */ }
 
-console.log(`[watcher] running as ${me.firstName || ""} (@${me.username || me.id}). Watching typing, mentions, deletes, edits, story views, contacts.`);
-await report(`🟢 Nodik watcher ishga tushdi — yozmoqchi bo'lганlar, eslatish, o'chirish/tahrir, story va kontaktларни kuzatyapman · ${escape(stamp())}`);
+const extra = [watchDeletes && "o'chirish", watchEdits && "tahrir"].filter(Boolean).join("/");
+console.log(`[watcher] running as ${me.firstName || ""} (@${me.username || me.id}). typing, mentions, story, contacts${extra ? ", " + extra + " (private)" : ""}.`);
+await report(`🟢 Nodik watcher ishga tushdi — yozmoqchi bo'lганlar, eslatish, story va kontaktларни kuzatyapman${extra ? ` + ${extra} (private)` : ""} · ${escape(stamp())}`);
 
 await pollStories();
 setInterval(pollStories, STORY_POLL_MS);
