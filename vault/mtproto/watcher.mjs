@@ -54,12 +54,13 @@ async function displayName(userId) {
   const key = String(userId);
   const hit = nameCache.get(key);
   if (hit && Date.now() - hit.at < NAME_TTL_MS) return hit.name;
-  let name = "Kimdir";
+  let name = `ID ${userId}`;
   try {
     const entity = await client.getEntity(userId);
-    name = [entity.firstName, entity.lastName].filter(Boolean).join(" ")
-      || (entity.username ? "@" + entity.username : null) || `id ${userId}`;
-  } catch { /* unknown / inaccessible */ }
+    const full = [entity.firstName, entity.lastName].filter(Boolean).join(" ");
+    const uname = entity.username ? "@" + entity.username : "";
+    name = full && uname ? `${full} (${uname})` : (full || uname || `ID ${userId}`);
+  } catch { /* non-contact / not cached yet → keep the id */ }
   nameCache.set(key, { name, at: Date.now() });
   return name;
 }
@@ -68,25 +69,39 @@ function stamp() {
   return new Date().toLocaleString("en-GB", { hour12: false, timeZone: env.TZ || "Asia/Tashkent" });
 }
 
-// Someone typed to you in a private chat. Debounce: if no message arrives
-// within the settle window, it counts as "tried to write but sent nothing".
-async function onTyping(userId) {
-  const key = String(userId);
-  const prev = typingState.get(key);
-  if (prev?.timer) clearTimeout(prev.timer);
-  const timer = setTimeout(async () => {
-    typingState.delete(key);
-    const name = await displayName(userId);
-    await report(`👀 <b>${escape(name)}</b> sizga yozmoqchi bo'ldi, lekin yubormadi · ${escape(stamp())}`);
-  }, TYPING_SETTLE_MS);
-  typingState.set(key, { timer, lastAt: Date.now() });
+// Round a start→last typing span into an honest "~N soniya". Telegram's typing
+// action lasts ~6 s per signal, so we add a little for the trailing action.
+function typedSeconds(st) {
+  return Math.max(1, Math.round((st.lastAt - st.startAt) / 1000) + 3);
 }
 
-// A real message arrived from that user → they sent it; cancel the "tried" timer.
+// Someone typed to you in a private chat. Each signal extends the session; if
+// no signal and no message arrives within the settle window, it counts as
+// "tried to write but sent nothing", with how long they were typing.
+async function onTyping(userId) {
+  const key = String(userId);
+  const now = Date.now();
+  let st = typingState.get(key);
+  if (!st) st = { startAt: now, lastAt: now, timer: null };
+  st.lastAt = now;
+  if (st.timer) clearTimeout(st.timer);
+  st.timer = setTimeout(async () => {
+    typingState.delete(key);
+    const name = await displayName(userId);
+    await report(`👀 <b>${escape(name)}</b> sizga <b>~${typedSeconds(st)} soniya</b> yozdi, lekin yubormadi · ${escape(stamp())}`);
+  }, TYPING_SETTLE_MS);
+  typingState.set(key, st);
+}
+
+// A real message arrived → they sent it. Return how long they were typing (or
+// null if we saw no typing), then clear the "tried" timer.
 function cancelTyping(userId) {
   const key = String(userId);
-  const prev = typingState.get(key);
-  if (prev?.timer) { clearTimeout(prev.timer); typingState.delete(key); }
+  const st = typingState.get(key);
+  if (!st) return null;
+  if (st.timer) clearTimeout(st.timer);
+  typingState.delete(key);
+  return typedSeconds(st);
 }
 
 client.addEventHandler(async (update) => {
@@ -98,10 +113,11 @@ client.addEventHandler(async (update) => {
     }
     // Incoming private message.
     if (update instanceof Api.UpdateShortMessage && !update.out) {
-      cancelTyping(update.userId);
+      const secs = cancelTyping(update.userId);
       if (reportMessages) {
         const name = await displayName(update.userId);
-        await report(`✍️ <b>${escape(name)}</b> sizga yozdi: ${escape((update.message || "").slice(0, 300))} · ${escape(stamp())}`);
+        const took = secs ? ` (${secs} soniya yozib)` : "";
+        await report(`✍️ <b>${escape(name)}</b>${took} sizga yozdi: ${escape((update.message || "").slice(0, 300))} · ${escape(stamp())}`);
       }
       return;
     }
@@ -109,10 +125,11 @@ client.addEventHandler(async (update) => {
       const m = update.message;
       if (m && !m.out && m.peerId instanceof Api.PeerUser) {
         const uid = m.peerId.userId;
-        cancelTyping(uid);
+        const secs = cancelTyping(uid);
         if (reportMessages && m.message) {
           const name = await displayName(uid);
-          await report(`✍️ <b>${escape(name)}</b> sizga yozdi: ${escape(m.message.slice(0, 300))} · ${escape(stamp())}`);
+          const took = secs ? ` (${secs} soniya yozib)` : "";
+          await report(`✍️ <b>${escape(name)}</b>${took} sizga yozdi: ${escape(m.message.slice(0, 300))} · ${escape(stamp())}`);
         }
       }
       return;
@@ -122,6 +139,8 @@ client.addEventHandler(async (update) => {
 
 await client.connect();
 const me = await client.getMe();
+// Load recent dialogs once so names/usernames resolve instead of bare ids.
+try { await client.getDialogs({ limit: 200 }); } catch { /* best effort */ }
 console.log(`[watcher] running as ${me.firstName || ""} (@${me.username || me.id}). Watching private-chat typing${reportMessages ? " and messages" : ""}.`);
 await report(`🟢 Nodik watcher ishga tushdi — yozmoqchi bo'lганларни kuzatyapman · ${escape(stamp())}`);
 
