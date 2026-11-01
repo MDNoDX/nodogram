@@ -1,0 +1,16 @@
+{
+  "name": "nodik-watcher",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone MTProto user-session monitor for Nodik: watches the owner's own incoming typing and messages and reports them to the log channel, independent of the Nodogram app and (on a server) of the Mac.",
+  "type": "module",
+  "main": "watcher.mjs",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "login": "node login.mjs",
+    "start": "node watcher.mjs"
+  },
+  "dependencies": {
+    "telegram": "^2.26.22"
+  }
+}

@@ -42,3 +42,7 @@ Tools/icon/*.icns
 # Nodogram Vault (local bot service)
 vault/node_modules/
 vault.env
+
+# Watcher secrets and deps
+vault/mtproto/.env
+vault/mtproto/node_modules/
