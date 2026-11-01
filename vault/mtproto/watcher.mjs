@@ -22,6 +22,7 @@ const session = env.MTPROTO_SESSION;
 const botToken = env.BOT_TOKEN;
 const channel = env.LOG_CHANNEL;
 const reportMessages = env.REPORT_MESSAGES === "1" || env.REPORT_MESSAGES === "true";
+const debug = env.DEBUG === "1" || env.DEBUG === "true";
 
 if (!apiId || !apiHash || !session) {
   console.error("Missing API_ID / API_HASH / MTPROTO_SESSION in .env — run `node login.mjs` first.");
@@ -106,9 +107,11 @@ function cancelTyping(userId) {
 
 client.addEventHandler(async (update) => {
   try {
-    // Private-chat typing (not groups).
+    if (debug) console.log("[upd]", update?.className || update?.constructor?.name || typeof update);
+    // Private-chat typing (not groups). Match any "active" action (typing,
+    // recording, uploading); ignore only an explicit cancel.
     if (update instanceof Api.UpdateUserTyping) {
-      if (update.action instanceof Api.SendMessageTypingAction) await onTyping(update.userId);
+      if (!(update.action instanceof Api.SendMessageCancelAction)) await onTyping(update.userId);
       return;
     }
     // Incoming private message.
