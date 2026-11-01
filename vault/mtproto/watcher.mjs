@@ -51,19 +51,23 @@ async function report(html) {
 
 const client = new TelegramClient(new StringSession(session), apiId, apiHash, { connectionRetries: 10, retryDelay: 2000 });
 
+// Returns ready HTML (already escaped) that always includes the numeric id as a
+// tappable tg:// link, so you can open the account even when it's not a contact.
 async function displayName(userId) {
   const key = String(userId);
   const hit = nameCache.get(key);
-  if (hit && Date.now() - hit.at < NAME_TTL_MS) return hit.name;
-  let name = `ID ${userId}`;
+  if (hit && Date.now() - hit.at < NAME_TTL_MS) return hit.html;
+  const idLink = `🆔 <a href="tg://user?id=${userId}">${userId}</a>`;
+  let html = idLink;   // default when we can't resolve a name (e.g. a stranger)
   try {
     const entity = await client.getEntity(userId);
     const full = [entity.firstName, entity.lastName].filter(Boolean).join(" ");
     const uname = entity.username ? "@" + entity.username : "";
-    name = full && uname ? `${full} (${uname})` : (full || uname || `ID ${userId}`);
-  } catch { /* non-contact / not cached yet → keep the id */ }
-  nameCache.set(key, { name, at: Date.now() });
-  return name;
+    const label = [escape(full), uname ? `(${escape(uname)})` : ""].filter(Boolean).join(" ");
+    if (label) html = `${label} · ${idLink}`;
+  } catch { /* non-contact / not cached yet → just the id link */ }
+  nameCache.set(key, { html, at: Date.now() });
+  return html;
 }
 
 function stamp() {
@@ -89,7 +93,7 @@ async function onTyping(userId) {
   st.timer = setTimeout(async () => {
     typingState.delete(key);
     const name = await displayName(userId);
-    await report(`👀 <b>${escape(name)}</b> sizga <b>~${typedSeconds(st)} soniya</b> yozdi, lekin yubormadi · ${escape(stamp())}`);
+    await report(`👀 <b>${name}</b> sizga <b>~${typedSeconds(st)} soniya</b> yozdi, lekin yubormadi · ${escape(stamp())}`);
   }, TYPING_SETTLE_MS);
   typingState.set(key, st);
 }
@@ -120,7 +124,7 @@ client.addEventHandler(async (update) => {
       if (reportMessages) {
         const name = await displayName(update.userId);
         const took = secs ? ` (${secs} soniya yozib)` : "";
-        await report(`✍️ <b>${escape(name)}</b>${took} sizga yozdi: ${escape((update.message || "").slice(0, 300))} · ${escape(stamp())}`);
+        await report(`✍️ <b>${name}</b>${took} sizga yozdi: ${escape((update.message || "").slice(0, 300))} · ${escape(stamp())}`);
       }
       return;
     }
@@ -132,7 +136,7 @@ client.addEventHandler(async (update) => {
         if (reportMessages && m.message) {
           const name = await displayName(uid);
           const took = secs ? ` (${secs} soniya yozib)` : "";
-          await report(`✍️ <b>${escape(name)}</b>${took} sizga yozdi: ${escape(m.message.slice(0, 300))} · ${escape(stamp())}`);
+          await report(`✍️ <b>${name}</b>${took} sizga yozdi: ${escape(m.message.slice(0, 300))} · ${escape(stamp())}`);
         }
       }
       return;
