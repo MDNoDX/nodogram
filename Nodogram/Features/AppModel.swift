@@ -490,6 +490,19 @@ public final class AppModel {
         case .closed, .loggingOut, .closing:
             // Closing to switch accounts is not a sign-out.
             if isSwitchingAccount { return }
+            // Signing out while other accounts exist: hand off to one of them
+            // without flashing the phone-number screen. Keep showing the
+            // current window until the next account is ready.
+            if isSigningOut, Accounts.ids.count > 1 {
+                if state == .closed {
+                    isSigningOut = false
+                    // Ignore the re-init's interim states (waitPhoneNumber) so
+                    // the sign-in screen never flashes before the handoff.
+                    isSwitchingAccount = true
+                    accountSignedOut()
+                }
+                return
+            }
             phase = .authenticating(.waitingForPhoneNumber)
             resetSessionState()
             if state == .closed, isSigningOut {
@@ -535,6 +548,9 @@ public final class AppModel {
         Task { [weak self] in
             guard let me = try? await gateway.myUserID() else { return }
             self?.myUserID = me
+            // Same number added twice? Collapse the duplicate and stop here if
+            // this slot is the one being torn down.
+            if self?.reconcileAccountIdentity(userID: me.rawValue) == true { return }
             if let profile = try? await gateway.profile() { self?.rememberAccountName(profile.displayName) }
             if let mine = await gateway.personProfile(me) { self?.myUsernames = mine.usernames.map { $0.lowercased() } }
             // "Saved" must work even when Saved Messages is not among the

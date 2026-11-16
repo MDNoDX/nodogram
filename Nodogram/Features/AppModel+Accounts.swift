@@ -9,6 +9,7 @@ public enum Accounts {
     static let idsKey = "accounts.ids"
     static let activeKey = "accounts.active"
     static let namesKey = "accounts.names"
+    static let userIDsKey = "accounts.userIDs"
 
     /// The original single account keeps the id "default", so existing data
     /// stays where it is.
@@ -42,10 +43,36 @@ public enum Accounts {
 
     static func remove(_ id: String) {
         UserDefaults.standard.set(ids.filter { $0 != id }, forKey: idsKey)
+        forgetUserID(id)
     }
 
     static func activate(_ id: String) {
         UserDefaults.standard.set(id, forKey: activeKey)
+    }
+
+    // ── Telegram identity per account (to catch the same number added twice) ──
+
+    static func userID(_ id: String) -> Int64? {
+        (UserDefaults.standard.dictionary(forKey: userIDsKey) as? [String: NSNumber])?[id]?.int64Value
+    }
+
+    static func setUserID(_ uid: Int64, for id: String) {
+        var map = (UserDefaults.standard.dictionary(forKey: userIDsKey) as? [String: NSNumber]) ?? [:]
+        map[id] = NSNumber(value: uid)
+        UserDefaults.standard.set(map, forKey: userIDsKey)
+    }
+
+    static func forgetUserID(_ id: String) {
+        guard var map = UserDefaults.standard.dictionary(forKey: userIDsKey) as? [String: NSNumber] else { return }
+        map[id] = nil
+        UserDefaults.standard.set(map, forKey: userIDsKey)
+    }
+
+    /// An account other than `except` that is already signed into this same
+    /// Telegram user, if any — i.e. the same number added twice.
+    static func twin(ofUserID uid: Int64, except: String) -> String? {
+        let map = (UserDefaults.standard.dictionary(forKey: userIDsKey) as? [String: NSNumber]) ?? [:]
+        return ids.first { $0 != except && map[$0]?.int64Value == uid }
     }
 }
 
@@ -103,18 +130,63 @@ extension AppModel {
         }
     }
 
-    /// After signing out of one of several accounts, move to the next.
+    /// After signing out of one of several accounts, move to another — and
+    /// prefer one that is already signed in, so we land on a real account
+    /// window instead of the phone-number screen.
     func accountSignedOut() {
         guard Accounts.ids.count > 1 else { return }
         let gone = Accounts.active
+        let remaining = Accounts.ids.filter { $0 != gone }
+        let next = remaining.first { Accounts.userID($0) != nil } ?? remaining.first ?? "default"
         Task { [weak self] in
             guard let self else { return }
             await self.closeCurrentAccount()
             Accounts.remove(gone)
             Self.removeAccountFolder(gone)
-            Accounts.activate(Accounts.ids.first ?? "default")
+            Accounts.activate(next)
+            self.accountBeforeAdding = nil
             self.accountsVersion += 1
             await self.start()
+        }
+    }
+
+    /// Called once an account reaches `ready` and its Telegram user id is known.
+    /// Records that id, and if another account slot is already signed into the
+    /// very same Telegram user (the same number added twice), collapses the two
+    /// into one. Returns `true` when THIS slot was the duplicate and is being
+    /// torn down (so the caller should stop setting up the old session).
+    @discardableResult
+    func reconcileAccountIdentity(userID uid: Int64) -> Bool {
+        let active = Accounts.active
+        guard let twin = Accounts.twin(ofUserID: uid, except: active) else {
+            Accounts.setUserID(uid, for: active)
+            return false
+        }
+        // Two slots hold the same account. Keep "default" when it is one of them
+        // (its folder is the original data); otherwise keep the one we are on.
+        let keep = (twin == "default") ? twin : active
+        let drop = (keep == active) ? twin : active
+        Accounts.setUserID(uid, for: keep)
+
+        if drop == active {
+            // We are the duplicate → hand off to the twin and remove ourselves.
+            Task { [weak self] in
+                guard let self else { return }
+                await self.closeCurrentAccount()
+                Accounts.remove(drop)
+                Self.removeAccountFolder(drop)
+                Accounts.activate(keep)
+                self.accountBeforeAdding = nil
+                self.accountsVersion += 1
+                await self.start()
+            }
+            return true
+        } else {
+            // The other slot is the duplicate → just forget it; we stay.
+            Accounts.remove(drop)
+            Self.removeAccountFolder(drop)
+            accountsVersion += 1
+            return false
         }
     }
 
