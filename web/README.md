@@ -13,7 +13,7 @@ exists, so message content, drafts and notes never leave your device.
 | UI | Next.js 16 (App Router), React 19, Tailwind 4 |
 | Protocol | GramJS — MTProto in TypeScript, speaking to Telegram from the browser over WebSocket |
 | Storage | IndexedDB via Dexie — chats, messages, drafts, draft history, notes |
-| Hosting | Vercel (static; no backend) |
+| Hosting | Cloudflare Workers static assets (static export; no backend) |
 
 The architecture decision behind this — including why TDLib's WebAssembly build
 was evaluated and rejected — is recorded in
@@ -37,21 +37,24 @@ Get your own `api_id` / `api_hash` at
 
 ## Deploying
 
-Live at **[nodogram.vercel.app](https://nodogram.vercel.app)**.
+Live at **[nodogram.mdnodx.workers.dev](https://nodogram.mdnodx.workers.dev)**.
 
-The Vercel project is connected to this GitHub repository with **Root
-Directory = `web`**, so every push to `main` deploys to production and every
-pull request gets a preview URL. No manual step is involved.
+`next build` produces a static export in `out/` (`output: 'export'`), served
+by Cloudflare Workers static assets (`wrangler.jsonc`). `public/sw.js` caches
+the app shell so it opens offline; chats, messages and drafts are already in
+IndexedDB.
 
-If you ever recreate the project:
+Manual deploy, from `web/` (the `NEXT_PUBLIC_*` values are baked in at build
+time from `.env.local`):
 
-1. Import the repository in Vercel and set **Root Directory** to `web`.
-2. Add `NEXT_PUBLIC_TELEGRAM_API_ID` and `NEXT_PUBLIC_TELEGRAM_API_HASH` under
-   **Settings → Environment Variables** (Production, Preview, Development).
+```bash
+npm run build && npx wrangler deploy
+```
 
-There is nothing else: no database to provision, no backend to run. Because
-the root directory is `web`, CLI deploys must be run from the repository root,
-not from inside `web/`.
+Pushes to `main` that touch `web/` run `.github/workflows/deploy-web.yml`. It
+deploys only when these repository secrets exist: `CLOUDFLARE_API_TOKEN`
+(template *Edit Cloudflare Workers*), `CLOUDFLARE_ACCOUNT_ID`,
+`NEXT_PUBLIC_TELEGRAM_API_ID`, `NEXT_PUBLIC_TELEGRAM_API_HASH`.
 
 ## Layering
 

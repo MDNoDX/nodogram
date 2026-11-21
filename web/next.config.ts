@@ -1,6 +1,10 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
+  // Fully static: the build is plain HTML/JS/CSS in out/, served by
+  // Cloudflare Workers static assets (see wrangler.jsonc).
+  output: 'export',
+  images: { unoptimized: true },
   // Nodogram Web runs entirely in the browser: GramJS speaks MTProto directly
   // from the client, and all data lives in IndexedDB. No server component ever
   // holds user data, which is what keeps the privacy model intact.

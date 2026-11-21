@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import { ServiceWorker } from '@/components/ServiceWorker';
 
 export const metadata: Metadata = {
   title: 'Nodogram',
@@ -36,7 +37,10 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        {children}
+        <ServiceWorker />
+      </body>
     </html>
   );
 }
