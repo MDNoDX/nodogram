@@ -37,10 +37,14 @@ Get your own `api_id` / `api_hash` at
 
 ## Deploying
 
-Live at **[nodogram.mdnodx.workers.dev](https://nodogram.mdnodx.workers.dev)**.
+Live at **[nodogramapp.netlify.app](https://nodogramapp.netlify.app)**.
 
 `next build` produces a static export in `out/` (`output: 'export'`), served
-by Cloudflare Workers static assets (`wrangler.jsonc`). `public/sw.js` caches
+by Cloudflare Workers static assets (`wrangler.jsonc`) at
+https://nodogram.mdnodx.workers.dev. The public address
+`nodogramapp.netlify.app` is a Netlify site that only proxies every path to
+that Worker (`/* -> https://nodogram.mdnodx.workers.dev/:splat 200!`), so it
+never needs a rebuild. `public/sw.js` caches
 the app shell so it opens offline; chats, messages and drafts are already in
 IndexedDB.
 

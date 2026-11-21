@@ -8,14 +8,14 @@ search that Telegram never gave you.
 > endorsed by, or sponsored by Telegram Messenger LLP. It does not use the
 > Telegram name, logo, or branding.
 
-**Live:** [nodogram.mdnodx.workers.dev](https://nodogram.mdnodx.workers.dev) — the browser client,
+**Live:** [nodogramapp.netlify.app](https://nodogramapp.netlify.app) — the browser client,
 deployed automatically from `main`.
 
 **Two clients, one product:**
 
 | | Where it runs | Foundation |
 |---|---|---|
-| **Nodogram Web** (`web/`) | any browser — [nodogram.mdnodx.workers.dev](https://nodogram.mdnodx.workers.dev) | GramJS + IndexedDB, no server |
+| **Nodogram Web** (`web/`) | any browser — [nodogramapp.netlify.app](https://nodogramapp.netlify.app) | GramJS + IndexedDB, no server |
 | **Nodogram for Mac** (`Nodogram/`) | macOS 15+ | TDLib 1.8.67 + SwiftUI |
 
 **Status (macOS):** the app builds, launches, and connects to TDLib.
